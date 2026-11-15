@@ -1,0 +1,137 @@
+# energybrain configuration — this is the real setup minus credentials.
+#
+# Copy to e.g. config/local.toml (gitignored) or mount as /config/energybrain.toml, and set
+# ENERGYBRAIN_CONFIG to its path. Durations are in seconds or minutes as the key says.
+# Power is kW, energy kWh, temperatures °C.
+
+# Local time zone for day and month bucketing (the capacity tariff counts local days).
+timezone = "Europe/Oslo"
+
+[mqtt]
+host = "192.168.1.172"
+port = 1883
+client_id = "energybrain"
+keep_alive_secs = 30
+# Prefix of our own topics for HomeKit / Easy MQTT (energybrain/mode, energybrain/zone/…).
+# prefix = "energybrain"
+# Credentials: prefer the environment variables ENERGYBRAIN_MQTT_USERNAME and
+# ENERGYBRAIN_MQTT_PASSWORD, which override these keys. Never commit real values.
+# username = ""
+# password = ""
+
+[http]
+listen = "0.0.0.0:8080"
+
+[store]
+path = "/data/energybrain.db"
+
+[meter]
+# Tibber Pulse in raw mode on a Kaifa MA304H3E: one HDLC frame per message.
+# List 1/2 (every 2.5 s / 10 s) give power, list 3 (hourly) the cumulative register.
+topic = "tibber"
+# Moving average used for the projection, so a kettle does not trigger shedding.
+power_window_secs = 60
+# No power reading for this long ⇒ meter stale ⇒ guard restores everything.
+stale_after_secs = 120
+
+[tariff]
+# Tensio TS 2026 capacity tiers (kapasitetsledd), see docs/tier-table.md.
+# Bands are half-open [from, to): an average of exactly 5.0 kW is in 5–10.
+tiers = [
+  { to_kw = 2, price = 131 },
+  { to_kw = 5, price = 233 },
+  { to_kw = 10, price = 397 },
+  { to_kw = 15, price = 585 },
+  { to_kw = 20, price = 775 },
+  { to_kw = 25, price = 964 },
+  { to_kw = 50, price = 1655 },
+  { to_kw = 75, price = 2599 },
+  { to_kw = 100, price = 3544 },
+  { to_kw = 150, price = 5117 },
+  { to_kw = 200, price = 7003 },
+  { to_kw = 300, price = 10147 },
+  { to_kw = 400, price = 13925 },
+  { to_kw = 500, price = 17697 },
+  { price = 21473 },
+]
+# Upper bound of the tier to stay in; must be one of the `to_kw` values above.
+target_kw = 5
+# The guard acts on (allowed − margin) to leave room for projection error.
+safety_margin_kwh = 0.3
+
+[guard]
+# Release a zone only when the projection with it back on stays below limit − margin.
+release_margin_kwh = 0.3
+min_shed_minutes = 5
+# At most one zone is restored per this interval, so floors do not all start at once.
+restore_stagger_minutes = 2
+# How long a fresh shed is credited before the meter's average shows it.
+settle_secs = 90
+
+[actuator]
+deadband = 0.25
+min_interval_secs = 60
+
+[zones]
+# A user setpoint within this of our last write is our own echo.
+echo_tolerance = 0.25
+# A user raising a shed zone keeps it out of shedding this long.
+override_minutes = 120
+# Power above this counts as heating; used to learn each floor's heater power.
+heating_threshold_kw = 0.05
+learn_rate = 0.2
+
+# Heatit Z-TRM3 via Z-Wave JS UI ("value only"): topics relative to each zone's `device`.
+# Setpoints are written to `<device>/<setpoint>/set` as a plain number.
+[thermostat]
+setpoint = "67/1/setpoint/1"
+power = "50/1/value/66049"   # W
+energy = "50/1/value/65537"  # kWh counter
+
+# Shed order: LOWER priority numbers shed first and are restored last.
+# `shed_allowed` is the default; HomeKit can switch it per zone at runtime.
+# Heater power is learned from the thermostat; `nominal_kw` is only used until then.
+[[zone]]
+id = "bad"
+name = "Bad"
+device = "zwave/Bad/Gulv_bad"
+priority = 1
+
+[[zone]]
+id = "vaskerom"
+name = "Vaskerom"
+device = "zwave/Vaskerom/Varmekabel"
+priority = 2
+nominal_kw = 0.6
+
+[[zone]]
+id = "gang"
+name = "Gang"
+device = "zwave/Gang/Gulv_gang"
+priority = 3
+
+# Rental unit (Utleie): currently empty. If tenants move in, switch shedding off for these
+# two in HomeKit, or set shed_allowed = false here.
+[[zone]]
+id = "utleie_1"
+name = "Utleie 1"
+device = "zwave/Utleie/Gulv_utleie_1"
+priority = 4
+
+[[zone]]
+id = "utleie_2"
+name = "Utleie 2"
+device = "zwave/Utleie/Gulv_utleie_2"
+priority = 5
+
+# Already kept at 15 °C, so shedding it gains little: last.
+[[zone]]
+id = "kjeller"
+name = "Kjeller"
+device = "zwave/Kjeller/Gulv_kjeller"
+priority = 6
+
+# Per-zone keys and their defaults:
+#   shed_allowed = true, shed_delta = 4.0, min_setpoint = 5.0, max_setpoint = 35.0,
+#   nominal_kw = 1.0, and setpoint_topic / power_topic / energy_topic to override the
+#   topics derived from `device` and [thermostat].
