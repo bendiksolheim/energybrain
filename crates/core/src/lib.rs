@@ -7,6 +7,7 @@
 #![cfg_attr(test, allow(clippy::float_cmp))]
 
 pub mod clock;
+pub mod energy;
 pub mod ids;
 pub mod tariff;
 pub mod time;
