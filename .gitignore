@@ -6,3 +6,5 @@ lcov.info
 *.db
 *.db-*
 .env
+/deploy/energybrain.toml
+/deploy/.env

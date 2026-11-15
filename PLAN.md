@@ -95,8 +95,7 @@ energybrain/                     (repo root = the folder Claude Code starts in)
 ├── tests/fixtures/              recorded/synthetic HAN + thermostat traces
 ├── deploy/
 │   ├── Dockerfile
-│   ├── docker-compose.yml       energybrain + victoriametrics + grafana
-│   └── grafana/                 provisioned datasource + peak-guard dashboard JSON
+│   └── docker-compose.yml       energybrain only (metrics stack dropped for phase 1)
 └── .github/workflows/ci.yml
 ```
 

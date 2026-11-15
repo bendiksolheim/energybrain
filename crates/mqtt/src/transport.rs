@@ -37,6 +37,8 @@ pub struct Link {
     client: AsyncClient,
     subscriptions: Vec<String>,
     retry_delay: Duration,
+    /// The last call reported a disconnect: pause before the next attempt.
+    backoff: bool,
 }
 
 impl std::fmt::Debug for Link {
@@ -70,13 +72,18 @@ pub fn connect(
         client: client.clone(),
         subscriptions,
         retry_delay,
+        backoff: false,
     };
     (link, Publisher(client))
 }
 
 impl Link {
-    /// Waits for the next connection change or message.
+    /// Waits for the next connection change or message. A disconnect is reported at once;
+    /// the pause before reconnecting happens on the following call.
     pub async fn next(&mut self) -> TransportEvent {
+        if std::mem::take(&mut self.backoff) {
+            tokio::time::sleep(self.retry_delay).await;
+        }
         loop {
             match self.eventloop.poll().await {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
@@ -97,7 +104,7 @@ impl Link {
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    tokio::time::sleep(self.retry_delay).await;
+                    self.backoff = true;
                     return TransportEvent::Disconnected(e.to_string());
                 }
             }

@@ -1,0 +1,6 @@
+target
+.git
+*.db
+*.db-*
+deploy/.env
+deploy/energybrain.toml

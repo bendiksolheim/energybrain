@@ -1,0 +1,29 @@
+# energybrain on the home server (amd64).
+#
+#   cp config/example.toml deploy/energybrain.toml   # adjust if needed (gitignored)
+#   printf 'ENERGYBRAIN_MQTT_USERNAME=…\nENERGYBRAIN_MQTT_PASSWORD=…\n' > deploy/.env
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# It starts in observe mode: it computes and reports, but writes no setpoints until the
+# HomeKit switch (energybrain/active) or energybrain/mode/set turns it active.
+services:
+  energybrain:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: energybrain:latest
+    restart: unless-stopped
+    environment:
+      ENERGYBRAIN_MQTT_USERNAME: ${ENERGYBRAIN_MQTT_USERNAME:?set in deploy/.env}
+      ENERGYBRAIN_MQTT_PASSWORD: ${ENERGYBRAIN_MQTT_PASSWORD:?set in deploy/.env}
+      RUST_LOG: info
+    volumes:
+      - ./energybrain.toml:/config/energybrain.toml:ro
+      - energybrain-data:/data
+    ports:
+      - "8080:8080"
+    # SIGTERM restores any shed floors before exiting; give it time.
+    stop_grace_period: 15s
+
+volumes:
+  energybrain-data:

@@ -146,3 +146,7 @@ keep it up to date if a decision changes.
 - Graceful stop (SIGTERM/Ctrl-C): `Engine::shutdown` restores shed zones in Active mode without
   changing the persisted mode, then MQTT is flushed (disconnect + wait), and the store thread and
   HTTP server are stopped.
+- Deployment: `deploy/Dockerfile` (rust:1.97 build → distroless cc nonroot, `/data` volume,
+  `/config/energybrain.toml`), `deploy/docker-compose.yml` (credentials from `deploy/.env`,
+  both gitignored). The image can't be built locally (no Docker on the dev Mac), so CI builds
+  it. jiff's `tzdb-bundle-always` embeds the tz database so `Europe/Oslo` resolves in distroless.
