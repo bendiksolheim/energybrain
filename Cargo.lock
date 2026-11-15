@@ -121,6 +121,12 @@ dependencies = [
 [[package]]
 name = "energybrain-han"
 version = "0.1.0"
+dependencies = [
+ "energybrain-core",
+ "jiff",
+ "proptest",
+ "thiserror",
+]
 
 [[package]]
 name = "energybrain-http"

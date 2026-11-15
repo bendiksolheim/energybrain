@@ -7,6 +7,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+energybrain-core = { version = "0.1.0", path = "../core" }
+jiff = "0.2.46"
+thiserror = "2.0.21"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+proptest = "1.12.0"

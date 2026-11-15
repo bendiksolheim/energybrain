@@ -98,3 +98,8 @@ keep it up to date if a decision changes.
 - Persisted guard event log + `GET /api/events` replace dashboards for reviewing observe mode.
 - Kaifa frame date-times are local wall-clock time; the han crate resolves them with the
   configured zone, using the DST status bit to pick the right side of the fall-back hour.
+- Kaifa list 3 (real capture 2026-11-15 22:00:10 local, 157 B): the meter clock reads hh:00:10,
+  but the registers are the values captured at the hour shift (Norwegian HAN spec), so
+  `Register::captured_at` moves a clock within the first minute of an hour back to hh:00:00.
+- HAN fixtures in `tests/fixtures/han/` are real frames with the meter serial replaced by
+  `1234567890123456` and the FCS recomputed. Never commit the real serial.
