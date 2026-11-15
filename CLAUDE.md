@@ -120,3 +120,7 @@ keep it up to date if a decision changes.
   `energybrain/status`, HTTP `/api/state` and the stored event log share one JSON shape, pinned by
   insta snapshots in `core/src/io.rs`. Units serialize as bare numbers, timestamps as RFC 3339 UTC.
 - `rumqttc`/`rumqttd` are used with `default-features = false` (no TLS; the broker is plain TCP).
+- M7 MQTT tests: **embedded `rumqttd`** (in-process, free port, with username/password auth)
+  — no Docker or testcontainers needed. Built from a TOML snippet since `rumqttd::Config` is serde.
+- MQTT retained status topics are published only when their payload changes and all re-sent on
+  every `ConnAck`. Setpoint writes go to `<setpoint>/set`, QoS 1, not retained.

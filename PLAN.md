@@ -300,9 +300,7 @@ sane, topics non-empty. Errors are typed and point at the offending key.
 - The adapter is split into a **pure translation layer** (topic/payload ↔ Input/Output;
   unit-tested exhaustively) and a **thin transport layer** (rumqttc). The transport is
   covered by integration tests against an **embedded `rumqttd` broker started in-process
-  on a random port** (dev-dependency). Fallback if `rumqttd` turns out to be
-  impractical: `testcontainers` with Mosquitto. Decide in M7 and record the decision in
-  CLAUDE.md.
+  on a random port** (dev-dependency). Decided in M7: rumqttd works (no Docker needed).
 
 **energybrain-store** (`rusqlite` with the `bundled` feature):
 - `trait Store { load() -> PersistedState; apply(&[Output]) }`, plus an in-memory
