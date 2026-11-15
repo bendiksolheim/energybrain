@@ -105,3 +105,14 @@ keep it up to date if a decision changes.
   `Register::captured_at` moves a clock within the first minute of an hour back to hh:00:00.
 - HAN fixtures in `tests/fixtures/han/` are real frames with the meter serial replaced by
   `1234567890123456` and the FCS recomputed. Never commit the real serial.
+- **Tests live inside each crate** (`#[cfg(test)]` modules, e.g. `core/src/scenarios.rs`), not in
+  `tests/` dirs: an integration-test binary links a second instrumented copy of the crate, and
+  llvm-cov then reports functions only one binary calls as uncovered.
+- Scenario/replay tests are a closed-loop Rust simulation (house + meter + echoing thermostats)
+  instead of CSV traces: typed, readable, and Active-mode feedback is real. Snapshots via `insta`
+  (`INSTA_UPDATE=new`, review the `.snap.new`, then rename) — no `cargo-insta` needed.
+- Guard credit (observe mode): a shed zone still drawing is credited its whole saving since the
+  shed; when such a zone is released its saving is **banked** for the rest of the hour, otherwise
+  observe mode re-sheds everything after the first release.
+- `Engine::new(config, persisted, now)` and `Input::SetMode { at, mode }` take time explicitly;
+  outputs gained `WouldWrite`, `PersistZoneBase`, `PersistMode`, `PersistShedAllowed`.

@@ -10,11 +10,15 @@ pub mod actuator;
 pub mod arbiter;
 pub mod clock;
 pub mod energy;
+pub mod engine;
 pub mod guard;
 pub mod ids;
+pub mod io;
 pub mod mode;
 pub mod peaks;
 pub mod policy;
+#[cfg(test)]
+mod scenarios;
 pub mod tariff;
 pub mod time;
 pub mod units;

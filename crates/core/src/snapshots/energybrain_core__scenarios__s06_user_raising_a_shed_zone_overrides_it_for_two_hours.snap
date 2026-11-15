@@ -1,0 +1,19 @@
+---
+source: crates/core/src/scenarios.rs
+assertion_line: 466
+expression: sim.snapshot()
+---
+11-15 17:20:20Z [active] shed bad (1.50 kW; projected 4.87 kWh > 4.70 kWh)
+11-15 17:20:20Z write bad 22.5 °C
+11-15 17:21:50Z [active] shed gang (1.00 kW; projected 5.01 kWh > 4.70 kWh)
+11-15 17:21:50Z write gang 18 °C
+11-15 17:25:00Z user sets bad to 27
+11-15 17:25:00Z [active] override bad at 27 °C until 11-15 19:25:00Z
+11-15 17:25:10Z [active] release bad (NotSheddable)
+11-15 17:25:40Z [active] shed kjeller (0.80 kW; projected 4.83 kWh > 4.70 kWh)
+11-15 17:25:40Z write kjeller 11 °C
+11-15 18:00:00Z [active] limit unreachable (projected 5.05 kWh, limit 4.70 kWh, sheddable 0.00 kWh)
+11-15 19:00:00Z hour 11-15 18:00:00Z = 5.05 kWh (Measured)
+11-15 19:25:00Z [active] override expired bad
+11-15 19:25:00Z [active] shed bad (1.50 kW; projected 5.05 kWh > 4.75 kWh)
+11-15 19:25:00Z write bad 23 °C

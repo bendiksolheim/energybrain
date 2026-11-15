@@ -5,9 +5,11 @@
 //!    are released immediately.
 //! 2. With a stale meter nothing new is shed and shed zones are released one per stagger.
 //! 3. The projection is reduced by a **credit** for shed zones whose reduction the meter
-//!    cannot show yet: zones still drawing power (always the case in observe mode, where
-//!    nothing is really written) and zones shed less than `settle` ago (the meter's moving
-//!    average needs time to fall). Without this the guard would keep shedding more zones.
+//!    cannot show: a zone still drawing power (always the case in observe mode, where nothing
+//!    is really written) is credited its whole saving since it was shed, `load × (hour end −
+//!    shed time)`; a zone that really switched off is credited `load × remaining` until
+//!    `settle` has passed (the meter's moving average needs time to fall). Without this the
+//!    guard would keep shedding more zones.
 //! 4. Above the limit, eligible zones are shed in priority order (**lower number first**)
 //!    until their expected reduction `load × remaining_fraction` covers the excess. If even
 //!    all of them cannot, they are all shed and `LimitUnreachable` is reported.
@@ -22,6 +24,7 @@ use jiff::{SignedDuration, Timestamp};
 use crate::energy::{Freshness, MeterSnapshot};
 use crate::ids::ZoneId;
 use crate::peaks::HourLimit;
+use crate::time::HourStart;
 use crate::units::{Kw, Kwh};
 use crate::zone::{Zone, ZoneSettings};
 
@@ -149,6 +152,9 @@ pub struct GuardState {
     pub last_release: Option<Timestamp>,
     /// Overall status after the last evaluation.
     pub status: GuardStatus,
+    /// Savings of zones released while still drawing (observe mode), for the hour they
+    /// belong to. The meter never saw them, so they stay credited until the hour ends.
+    pub banked: Option<(HourStart, Kwh)>,
 }
 
 impl GuardState {
@@ -160,23 +166,29 @@ impl GuardState {
     /// Re-evaluates the guard and returns what changed.
     pub fn update(&mut self, cfg: &GuardConfig, input: &GuardInput<'_>) -> Vec<GuardEvent> {
         let now = input.now;
+        let hour = input.meter.hour;
         let mut events = Vec::new();
+        if self.banked.is_some_and(|(h, _)| h != hour) {
+            self.banked = None;
+        }
 
         let reason = if input.enabled {
             ReleaseReason::NotSheddable
         } else {
             ReleaseReason::GuardOff
         };
-        self.shed.retain(|s| {
-            let keep = input.enabled && input.zones.get(&s.zone).is_some_and(|z| z.sheddable(now));
-            if !keep {
-                events.push(GuardEvent::Release {
-                    zone: s.zone.clone(),
-                    reason,
-                });
-            }
-            keep
-        });
+        let (keep, dropped): (Vec<Shed>, Vec<Shed>) =
+            std::mem::take(&mut self.shed).into_iter().partition(|s| {
+                input.enabled && input.zones.get(&s.zone).is_some_and(|z| z.sheddable(now))
+            });
+        self.shed = keep;
+        for s in dropped {
+            self.bank(input, &s);
+            events.push(GuardEvent::Release {
+                zone: s.zone,
+                reason,
+            });
+        }
         if !input.enabled {
             self.status = GuardStatus::Disabled;
             return events;
@@ -184,24 +196,33 @@ impl GuardState {
 
         let (Freshness::Fresh, Some(raw)) = (input.meter.freshness, input.meter.projected) else {
             self.status = GuardStatus::MeterStale;
-            self.release_staggered(cfg, now, ReleaseReason::MeterStale, &mut events);
+            self.release_staggered(cfg, input, ReleaseReason::MeterStale, &mut events);
             return events;
         };
 
-        let remaining = input.meter.hour.remaining_fraction(now);
+        let remaining = hour.remaining_fraction(now);
         let credit: Kwh = self
             .shed
             .iter()
-            .filter(|s| {
-                now.duration_since(s.since) < cfg.settle
-                    || input
-                        .zones
-                        .get(&s.zone)
-                        .is_some_and(|z| z.is_drawing(input.settings))
+            .map(|s| {
+                let drawing = input
+                    .zones
+                    .get(&s.zone)
+                    .is_some_and(|z| z.is_drawing(input.settings));
+                if drawing {
+                    // Nothing of the shed shows in the meter (observe mode, or a thermostat
+                    // that did not react): credit the whole saving since the shed.
+                    s.load * hour.end().duration_since(s.since.max(hour.start()))
+                } else if now.duration_since(s.since) < cfg.settle {
+                    // Really off, but the moving average has not caught up yet.
+                    s.load.for_one_hour() * remaining
+                } else {
+                    Kwh::ZERO
+                }
             })
-            .map(|s| s.load.for_one_hour() * remaining)
             .sum();
-        let projected = raw - credit;
+        let banked = self.banked.map_or(Kwh::ZERO, |(_, k)| k);
+        let projected = raw - credit - banked;
         let limit = input.limit.effective;
 
         if projected > limit {
@@ -211,7 +232,7 @@ impl GuardState {
             if now.duration_since(last.since) >= cfg.min_shed_duration
                 && projected + comeback < limit - cfg.release_margin
             {
-                self.release_staggered(cfg, now, ReleaseReason::BelowLimit, &mut events);
+                self.release_staggered(cfg, input, ReleaseReason::BelowLimit, &mut events);
             }
             self.status = self.settled_status();
         } else {
@@ -274,10 +295,11 @@ impl GuardState {
     fn release_staggered(
         &mut self,
         cfg: &GuardConfig,
-        now: Timestamp,
+        input: &GuardInput<'_>,
         reason: ReleaseReason,
         events: &mut Vec<GuardEvent>,
     ) {
+        let now = input.now;
         if self
             .last_release
             .is_some_and(|t| now.duration_since(t) < cfg.restore_stagger)
@@ -286,10 +308,25 @@ impl GuardState {
         }
         if let Some(s) = self.shed.pop() {
             self.last_release = Some(now);
+            self.bank(input, &s);
             events.push(GuardEvent::Release {
                 zone: s.zone,
                 reason,
             });
+        }
+    }
+
+    /// Banks the saving of a zone released while still drawing.
+    fn bank(&mut self, input: &GuardInput<'_>, s: &Shed) {
+        let drawing = input
+            .zones
+            .get(&s.zone)
+            .is_some_and(|z| z.is_drawing(input.settings));
+        if drawing {
+            let hour = input.meter.hour;
+            let saved = s.load * input.now.duration_since(s.since.max(hour.start()));
+            let total = self.banked.map_or(Kwh::ZERO, |(_, k)| k) + saved.max(Kwh::ZERO);
+            self.banked = Some((hour, total));
         }
     }
 
@@ -309,7 +346,6 @@ mod tests {
     use super::*;
     use crate::energy::Basis;
     use crate::peaks::LimitBasis;
-    use crate::time::HourStart;
     use crate::units::Celsius;
     use crate::zone::Override;
     use crate::zone::tests::{config, ts};
@@ -476,6 +512,35 @@ mod tests {
         r.stop_drawing("bad");
         assert!(r.step(at(31, 0), 4.6).is_empty());
         assert_eq!(r.shed_ids(), ["bad"]);
+    }
+
+    #[test]
+    fn observe_mode_banks_savings_of_released_zones_until_the_hour_ends() {
+        let mut r = Rig::new(&[("bad", 1, 1.0)]);
+        r.step(at(0, 0), 5.0);
+        assert_eq!(r.shed_ids(), ["bad"]);
+        // Still drawing (nothing was written). Released 30 min later; it virtually saved
+        // 0.5 kWh, which the meter never saw.
+        assert_eq!(
+            released(&r.step(at(30, 0), 3.5)),
+            [("bad", ReleaseReason::BelowLimit)]
+        );
+        assert_eq!(
+            r.state.banked,
+            Some((HourStart::containing(at(0, 0)), Kwh::new(0.5)))
+        );
+        assert!(
+            r.step(at(31, 0), 5.1).is_empty(),
+            "banked 0.5 keeps 5.1 under the limit"
+        );
+        // A new hour starts from scratch.
+        r.step(at(60, 0), 1.0);
+        assert_eq!(r.state.banked, None);
+        // A zone that really switched off banks nothing.
+        r.step(at(61, 0), 5.0);
+        r.stop_drawing("bad");
+        r.step(at(70, 0), 1.0);
+        assert_eq!(r.state.banked, None);
     }
 
     #[test]

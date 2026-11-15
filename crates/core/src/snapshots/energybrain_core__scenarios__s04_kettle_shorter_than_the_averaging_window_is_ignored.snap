@@ -1,0 +1,5 @@
+---
+source: crates/core/src/scenarios.rs
+expression: sim.snapshot()
+---
+

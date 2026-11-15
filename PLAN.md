@@ -219,8 +219,10 @@ Phase 1 policies:
    the current shed set into `Cap` proposals, so `Policy::propose` stays `&self`.)
    Only zones currently drawing power (> `heating_threshold`) are candidates — shedding an
    idle floor saves nothing now. The projection is reduced by a **credit** for shed zones
-   the meter cannot show yet: zones still drawing (always true in observe mode, where
-   nothing is written) and zones shed less than `settle` (default 90 s) ago. Without it
+   the meter cannot show: a zone still drawing (always true in observe mode, where nothing
+   is written) is credited its whole saving since the shed, `load × (hour end − shed time)`;
+   a zone that really switched off is credited `load × remaining` for `settle` (default
+   90 s) while the moving average catches up. Without it
    the guard would shed every zone in observe mode. A zone is released only if the
    projection *with its load back* stays below `limit − release_margin`.
    If `projected > effective_limit`, choose zones to shed in ascending
@@ -262,7 +264,7 @@ status/metrics. **Leaving `Active`** (to `Observe` or `Off`) first writes every 
 changed back to its base, as the last act of `Active`, then switches; after that nothing
 is written (user decision). In `Off` the guard is disabled entirely.
 
-**Engine:** `Engine::new(config, persisted_state)`,
+**Engine:** `Engine::new(config, persisted_state, now)`,
 `Engine::handle(&mut self, input: Input) -> Vec<Output>`. `Tick` drives evaluation
 (default every 10 s). The engine is the single owner of state, with no interior
 mutability or locks.
@@ -386,8 +388,9 @@ Avoid adding anything else without noting why in CLAUDE.md.
     - hour accounting sums equal the total cumulative delta;
     - DST: every UTC hour maps to exactly one local date, and local days have 23/24/25
       hours.
-  - **Scenario/replay tests:** `tests/fixtures/*.csv` traces (timestamp, power,
-    cumulative, optional setpoint events) fed through `Engine` with `SimClock`.
+  - **Scenario/replay tests:** a closed-loop simulation in `core/src/scenarios.rs` (house
+    load, meter every 2 s plus hourly register, thermostats that echo writes and switch off
+    when shed) driving `Engine`. (Changed from CSV traces; see the decision log.)
     Assert outputs and snapshot the decision log with `insta`. Required scenarios:
     1. quiet hour → no action
     2. evening spike → sheds lowest-priority zone first, then more, restores with
@@ -404,6 +407,8 @@ Avoid adding anything else without noting why in CLAUDE.md.
     10. month rollover
     11. DST forward (March) and back (October) days
     12. restart mid-shed → correct restore/continue from persisted state
+    13. leaving Active restores every shed zone at once
+    14. EV charging → limit unreachable, reported once
   - **Adapter integration tests:** embedded broker for MQTT, tempfile SQLite,
     `oneshot` for HTTP.
 - `just check` = `cargo fmt --check && cargo clippy --workspace --all-targets

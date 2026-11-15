@@ -104,8 +104,9 @@ macro_rules! additive {
         }
 
         impl Sum for $name {
+            /// Starts at +0 (std's float `sum` starts at −0, which displays as "-0").
             fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-                Self(iter.map(|x| x.0).sum())
+                Self(iter.fold(0.0, |acc, x| acc + x.0))
             }
         }
     };
@@ -277,6 +278,7 @@ mod tests {
         x -= b;
         assert_eq!(x, a);
         assert_eq!([a, b].into_iter().sum::<T>(), sum);
+        assert!(!format!("{:?}", std::iter::empty::<T>().sum::<T>()).contains('-'));
     }
 
     #[test]

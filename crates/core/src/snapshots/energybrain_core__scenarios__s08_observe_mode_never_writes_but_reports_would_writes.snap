@@ -1,0 +1,12 @@
+---
+source: crates/core/src/scenarios.rs
+expression: sim.snapshot()
+---
+11-15 17:20:20Z [observe] shed bad (1.50 kW; projected 4.87 kWh > 4.70 kWh)
+11-15 17:20:20Z would write bad 22.5 °C
+11-15 17:20:50Z [observe] shed gang (1.00 kW; projected 4.71 kWh > 4.70 kWh)
+11-15 17:20:50Z would write gang 18 °C
+11-15 17:45:20Z [observe] release gang (BelowLimit)
+11-15 17:45:20Z would write gang 22 °C
+11-15 17:47:20Z [observe] release bad (BelowLimit)
+11-15 17:47:20Z would write bad 26.5 °C
