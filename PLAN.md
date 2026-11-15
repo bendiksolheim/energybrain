@@ -309,8 +309,8 @@ sane, topics non-empty. Errors are typed and point at the offending key.
   override_value, override_until)` (all nullable), `settings(key TEXT PK, value TEXT)`
   (mode, shed_allowed per zone), `zone_hourly_energy(zone TEXT, hour_start_utc INTEGER,
   kwh REAL, PK(zone, hour_start_utc))`, `zone_stats(zone TEXT PK, heating_kw REAL)`,
-  `events(id INTEGER PK, at INTEGER, kind TEXT, zone TEXT NULL, detail TEXT)` (pruned
-  after 90 days). Schema migrations run on open, with a
+  `events(id INTEGER PK, at INTEGER, kind TEXT, zone TEXT NULL, detail TEXT)` (`SqliteStore::prune_events` exists but is not scheduled in phase 1: a few
+  dozen events a day is negligible). Schema migrations run on open, with a
   `schema_version` table.
 - Daily peaks are **derived** from `hourly_energy`, not stored separately.
 - Tested against in-memory and tempfile databases.
