@@ -3,7 +3,8 @@
 use std::fmt;
 
 /// What the service is allowed to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Mode {
     /// Guard disabled; nothing is computed for shedding and nothing is written.
     Off,

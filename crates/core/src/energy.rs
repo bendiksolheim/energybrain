@@ -39,7 +39,8 @@ impl Default for MeterConfig {
 }
 
 /// How an hour's energy was determined, worst to best.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Quality {
     /// From power integration only.
     Estimated,
@@ -50,7 +51,7 @@ pub enum Quality {
 }
 
 /// The energy used in one hour.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct HourEnergy {
     /// The hour.
     pub hour: HourStart,
@@ -70,7 +71,8 @@ pub enum Basis {
 }
 
 /// Whether instant-power data is current.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Freshness {
     /// No power reading received yet.
     NoData,

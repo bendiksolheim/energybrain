@@ -116,3 +116,7 @@ keep it up to date if a decision changes.
   observe mode re-sheds everything after the first release.
 - `Engine::new(config, persisted, now)` and `Input::SetMode { at, mode }` take time explicitly;
   outputs gained `WouldWrite`, `PersistZoneBase`, `PersistMode`, `PersistShedAllowed`.
+- Core derives `serde::Serialize` (serde is pure) on status/event types so MQTT
+  `energybrain/status`, HTTP `/api/state` and the stored event log share one JSON shape, pinned by
+  insta snapshots in `core/src/io.rs`. Units serialize as bare numbers, timestamps as RFC 3339 UTC.
+- `rumqttc`/`rumqttd` are used with `default-features = false` (no TLS; the broker is plain TCP).

@@ -66,7 +66,8 @@ pub struct Shed {
 }
 
 /// The guard's overall state, for status and HomeKit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GuardStatus {
     /// Nothing shed.
     #[default]
@@ -82,7 +83,8 @@ pub enum GuardStatus {
 }
 
 /// Why a zone was released.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReleaseReason {
     /// The projection is comfortably below the limit.
     BelowLimit,
@@ -95,7 +97,8 @@ pub enum ReleaseReason {
 }
 
 /// Something the guard did, for the event log.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuardEvent {
     /// A zone was shed.
     Shed {

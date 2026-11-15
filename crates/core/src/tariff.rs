@@ -9,7 +9,8 @@
 use crate::units::{Kr, Kw};
 
 /// Position of a band in the table, 0 = cheapest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(transparent)]
 pub struct TierIndex(pub usize);
 
 /// One bounded band, given by its exclusive upper bound. Its lower bound is the previous
@@ -23,7 +24,7 @@ pub struct Step {
 }
 
 /// A fully described band.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct Tier {
     /// Position in the table.
     pub index: TierIndex,

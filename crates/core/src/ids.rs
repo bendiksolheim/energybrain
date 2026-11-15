@@ -41,6 +41,12 @@ impl ZoneId {
     }
 }
 
+impl serde::Serialize for ZoneId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
 impl fmt::Display for ZoneId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -56,6 +62,7 @@ mod tests {
         let id = ZoneId::new("bad_1-etg").unwrap();
         assert_eq!(id.as_str(), "bad_1-etg");
         assert_eq!(id.to_string(), "bad_1-etg");
+        assert_eq!(serde_json::to_string(&id).unwrap(), r#""bad_1-etg""#);
     }
 
     #[test]

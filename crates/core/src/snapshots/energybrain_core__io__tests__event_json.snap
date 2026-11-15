@@ -1,0 +1,73 @@
+---
+source: crates/core/src/io.rs
+assertion_line: 380
+expression: json(&events)
+---
+[
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "guard",
+      "event": {
+        "type": "shed",
+        "zone": "bad",
+        "load": 1.5,
+        "projected": 5.2,
+        "limit": 4.7
+      }
+    }
+  },
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "guard",
+      "event": {
+        "type": "release",
+        "zone": "bad",
+        "reason": "below_limit"
+      }
+    }
+  },
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "guard",
+      "event": {
+        "type": "limit_unreachable",
+        "projected": 9.0,
+        "limit": 4.7,
+        "available": 1.0
+      }
+    }
+  },
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "override",
+      "zone": "bad",
+      "value": 27.0,
+      "until": "2026-11-15T19:20:00Z"
+    }
+  },
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "override_expired",
+      "zone": "bad"
+    }
+  },
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "mode_changed",
+      "from": "active",
+      "to": "off"
+    }
+  }
+]

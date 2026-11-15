@@ -17,7 +17,8 @@ use crate::units::{Celsius, CelsiusDelta};
 use crate::zone::Zone;
 
 /// Which policy produced a proposal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PolicyName {
     /// [`UserSetpointBase`].
     UserSetpointBase,
@@ -39,7 +40,7 @@ impl PolicyName {
 }
 
 /// Why a proposal was made.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Reason {
     /// The proposing policy.
     pub policy: PolicyName,

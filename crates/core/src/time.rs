@@ -23,7 +23,8 @@ const NANOS_PER_HOUR: i128 = 3_600_000_000_000;
 pub struct TimeError(#[from] jiff::Error);
 
 /// The UTC start of an hour. Always aligned to a whole hour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(transparent)]
 pub struct HourStart(Timestamp);
 
 impl HourStart {

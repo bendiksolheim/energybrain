@@ -286,10 +286,12 @@ impl Engine {
             for s in std::mem::take(&mut self.guard.shed) {
                 out.push(self.event(
                     at,
-                    EventKind::Guard(GuardEvent::Release {
-                        zone: s.zone,
-                        reason: ReleaseReason::GuardOff,
-                    }),
+                    EventKind::Guard {
+                        event: GuardEvent::Release {
+                            zone: s.zone,
+                            reason: ReleaseReason::GuardOff,
+                        },
+                    },
                 ));
             }
             let decisions = self.decide(at);
@@ -349,7 +351,7 @@ impl Engine {
         };
         let events = self.guard.update(&self.cfg.guard, &input);
         for g in events {
-            out.push(self.event(now, EventKind::Guard(g)));
+            out.push(self.event(now, EventKind::Guard { event: g }));
         }
 
         let decisions = self.decide(now);

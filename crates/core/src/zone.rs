@@ -52,7 +52,7 @@ impl Default for ZoneSettings {
 }
 
 /// A user override: the zone is kept at `value` and not shed until `until`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct Override {
     /// The user's setpoint.
     pub value: Celsius,

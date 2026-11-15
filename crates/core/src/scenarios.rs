@@ -291,7 +291,7 @@ impl Sim {
 
     fn sheds(&self) -> usize {
         self.count(|o| {
-            matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard(GuardEvent::Shed { .. })))
+            matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard { event: GuardEvent::Shed { .. } }))
         })
     }
 
@@ -322,20 +322,28 @@ fn describe(now: Timestamp, o: &Output) -> Option<String> {
             "{t} [{}] {}",
             e.mode,
             match &e.kind {
-                EventKind::Guard(GuardEvent::Shed {
-                    zone,
-                    load,
-                    projected,
-                    limit,
-                }) => format!("shed {zone} ({load:.2}; projected {projected:.2} > {limit:.2})"),
-                EventKind::Guard(GuardEvent::Release { zone, reason }) => {
+                EventKind::Guard {
+                    event:
+                        GuardEvent::Shed {
+                            zone,
+                            load,
+                            projected,
+                            limit,
+                        },
+                } => format!("shed {zone} ({load:.2}; projected {projected:.2} > {limit:.2})"),
+                EventKind::Guard {
+                    event: GuardEvent::Release { zone, reason },
+                } => {
                     format!("release {zone} ({reason:?})")
                 }
-                EventKind::Guard(GuardEvent::LimitUnreachable {
-                    projected,
-                    limit,
-                    available,
-                }) => format!(
+                EventKind::Guard {
+                    event:
+                        GuardEvent::LimitUnreachable {
+                            projected,
+                            limit,
+                            available,
+                        },
+                } => format!(
                     "limit unreachable (projected {projected:.2}, limit {limit:.2}, sheddable {available:.2})"
                 ),
                 EventKind::Override { zone, value, until } => {
@@ -644,7 +652,7 @@ fn s14_ev_charging_makes_the_limit_unreachable_and_says_so() {
     sim.background -= 11.0;
     sim.run(mins(20));
     let unreachable = sim.count(|o| {
-        matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard(GuardEvent::LimitUnreachable { .. })))
+        matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard { event: GuardEvent::LimitUnreachable { .. } }))
     });
     assert!(unreachable >= 1);
     insta::assert_snapshot!(sim.snapshot());

@@ -1,0 +1,58 @@
+---
+source: crates/core/src/io.rs
+assertion_line: 331
+expression: json(&status)
+---
+{
+  "at": "2026-11-15T17:20:00Z",
+  "mode": "observe",
+  "guard": "shedding",
+  "hour": "2026-11-15T17:00:00Z",
+  "used": 1.5,
+  "projected": 5.2,
+  "power": 6.1,
+  "freshness": "fresh",
+  "meter_last_seen": "2026-11-15T17:19:58Z",
+  "limit": {
+    "allowed": 7.0,
+    "effective": 6.7,
+    "basis": {
+      "type": "today_already_higher",
+      "today_max": 7.0
+    }
+  },
+  "top_days": [
+    {
+      "date": "2026-11-15",
+      "hour": "2026-11-15T17:00:00Z",
+      "kwh": 7.0
+    }
+  ],
+  "top_average": 7.0,
+  "tier": {
+    "index": 2,
+    "from": 5.0,
+    "to": 10.0,
+    "price": 397.0
+  },
+  "zones": [
+    {
+      "id": "bad",
+      "name": "Bad",
+      "base": 26.5,
+      "reported": 26.5,
+      "decision": 22.5,
+      "reasons": [
+        {
+          "policy": "peak_guard",
+          "detail": "shed to 22.5 °C"
+        }
+      ],
+      "shed": true,
+      "shed_allowed": true,
+      "override_until": null,
+      "power": 1.5,
+      "heating_kw": 1.45
+    }
+  ]
+}

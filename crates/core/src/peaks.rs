@@ -21,7 +21,7 @@ use crate::units::{Kw, Kwh};
 pub const TOP_DAYS: usize = 3;
 
 /// One day's highest hour.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct DayPeak {
     /// Local date.
     pub date: Date,
@@ -129,7 +129,8 @@ impl MonthLedger {
 }
 
 /// Why the limit has the value it has.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum LimitBasis {
     /// The target tier's upper bound.
     TierBound,
@@ -141,7 +142,7 @@ pub enum LimitBasis {
 }
 
 /// The energy the running hour may use.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct HourLimit {
     /// Allowed energy for the hour before the safety margin.
     pub allowed: Kwh,

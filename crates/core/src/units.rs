@@ -20,7 +20,8 @@ const SECONDS_PER_HOUR: f64 = 3600.0;
 macro_rules! unit {
     ($(#[$doc:meta])* $name:ident, $suffix:literal) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
+        #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default, serde::Serialize)]
+        #[serde(transparent)]
         pub struct $name(f64);
 
         impl $name {
