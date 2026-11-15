@@ -1,0 +1,12 @@
+[package]
+name = "energybrain-han"
+description = "Pure parser for Kaifa HAN (HDLC/DLMS) frames as published by Tibber Pulse."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

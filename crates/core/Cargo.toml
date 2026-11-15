@@ -1,0 +1,12 @@
+[package]
+name = "energybrain-core"
+description = "Pure domain: units, clock, time, tariff, energy accounting, peaks, zones, policies, arbiter, actuator, engine. No async, no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

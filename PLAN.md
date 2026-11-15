@@ -1,0 +1,454 @@
+# energybrain — implementation plan (phase 1: peak guard)
+
+This plan is the hand-over from an earlier design discussion. Read it fully before writing
+code, then work through the milestones in order. Each milestone must end with
+`just check` green (fmt, clippy, tests, **100 % line coverage**).
+
+---
+
+## 1. What we are building
+
+`energybrain` is a long-running service (Rust, shipped as a Docker container) that
+controls electric floor heating in a Norwegian home to keep grid-rent (nettleie) costs
+down. It talks to everything over MQTT and is exposed to Apple Home via the existing
+Homebridge **Easy MQTT** plugin. No Homebridge plugin is written.
+
+### Context
+- Electricity is on **Norgespris** (fixed energy price), so spot-price optimisation is
+  not the goal. What varies is grid rent:
+  - **Capacity charge (kapasitetsledd):** monthly tier chosen from the **average of the
+    three highest hourly consumptions (kWh/h) in the month, on three different days**.
+  - **Energy charge (energiledd):** cheaper at night (22–06) and weekends/holidays.
+    Not used in phase 1, but the tariff model must be able to hold it later.
+- Z-Wave runs through **Z-Wave JS UI**, which publishes to MQTT in *value only* mode with
+  topics under `zwave/<room>/<device>/...`. Setpoints are written by publishing to the
+  value topic with a `/set` suffix.
+- Whole-house consumption comes from the smart meter's **HAN port** via a local reader
+  that publishes to MQTT (exact model/format to be confirmed — see M0).
+
+### Phase 1 goal: the peak guard
+Keep each hour's whole-house consumption below a limit that keeps the month in the
+target capacity tier. Do it by temporarily lowering floor-heating setpoints zone by zone
+(in priority order), and restoring them afterwards. Ship with an **observe-only mode**
+that computes and reports everything but never writes setpoints, so it can run for a
+few weeks before going live.
+
+### Non-goals for phase 1 (but the architecture must make them easy later)
+- Schedules / comfort profiles, presence/away mode
+- Night/weekend tariff shifting, Norwegian public holidays
+- Weather compensation (met.no Locationforecast + outdoor sensor)
+- Heat-pump coordination
+- Monthly 5 000 kWh Norgespris cap and spot-price fallback
+- Model-based optimiser (LP via `good_lp` + `microlp`)
+- Custom web UI (Grafana covers dashboards in phase 1)
+
+---
+
+## 2. Architecture
+
+**Functional core, imperative shell.** All decisions live in a pure, synchronous,
+I/O-free core driven by an explicit clock. Adapters translate the outside world into
+typed `Input`s and typed `Output`s back into side effects.
+
+```
+ HAN reader ─┐                                          ┌─► zwave/.../set   (setpoints)
+ Thermostats ┼─► MQTT ─► [mqtt adapter] ─► Input ─┐     ├─► energybrain/*    (HomeKit status)
+ Home app ───┘   (Easy MQTT command topics)        │     │
+                                                   ▼     │
+                                   ┌──────── Engine (pure) ───────┐
+                                   │ state: meter, hours, peaks,  │
+                                   │        zones, mode, overrides│
+                                   │ policies → proposals         │
+                                   │ arbiter  → zone decisions    │
+                                   │ actuator → diffed commands   │
+                                   └──────────────┬───────────────┘
+                                                  │ Output
+                       ┌──────────────────────────┼───────────────────────┐
+                       ▼                          ▼                       ▼
+                 SQLite store              mqtt adapter            /metrics, /api/state
+            (hourly kWh, overrides,                                (axum) → VictoriaMetrics
+             last written setpoints)                                       → Grafana
+```
+
+### Cargo workspace layout
+
+```
+energybrain/                     (repo root = the folder Claude Code starts in)
+├── Cargo.toml                   workspace, shared lints, profile settings
+├── justfile                     check / test / cov / run / docker
+├── CLAUDE.md
+├── PLAN.md
+├── config/
+│   └── example.toml             fully commented example config
+├── crates/
+│   ├── core/      energybrain-core    pure domain: units, clock, time, tariff, energy
+│   │                                  accounting, peaks, zones, policies, arbiter,
+│   │                                  actuator, engine. NO tokio, NO I/O.
+│   ├── config/    energybrain-config  TOML → validated typed config (serde)
+│   ├── mqtt/      energybrain-mqtt    rumqttc adapter: topic mapping, payload parsing,
+│   │                                  Input/Output translation, Easy MQTT topics
+│   ├── han/       energybrain-han     pure Kaifa HDLC/DLMS frame parser (Tibber Pulse raw)
+│   ├── store/     energybrain-store   rusqlite (bundled) persistence behind a trait
+│   ├── http/      energybrain-http    axum: /healthz, /metrics, /api/state
+│   └── app/       energybrain         binary: runtime loop (lib.rs) + main.rs plumbing
+├── tests/fixtures/              recorded/synthetic HAN + thermostat traces
+├── deploy/
+│   ├── Dockerfile
+│   ├── docker-compose.yml       energybrain + victoriametrics + grafana
+│   └── grafana/                 provisioned datasource + peak-guard dashboard JSON
+└── .github/workflows/ci.yml
+```
+
+Rule: `energybrain-core` depends on nothing async and nothing that does I/O. Adapters
+depend on core; core never depends on adapters. `app` is the only crate that knows
+about all the others.
+
+### Core concepts (energybrain-core)
+
+**Units (newtypes, no raw f64 across module boundaries):**
+`Kw`, `Kwh`, `Celsius`, `CelsiusDelta`, `Kr` (for tier prices). Implement only the
+arithmetic that makes physical sense (e.g. `Kw * Duration -> Kwh`, `Kwh / Duration -> Kw`,
+`Celsius - Celsius -> CelsiusDelta`). No `Kw + Kwh`.
+
+**Clock:** `trait Clock { fn now(&self) -> jiff::Timestamp; }` with `SystemClock`
+(in app) and `SimClock` (in core, test-support feature). The engine never reads time on
+its own — `now` is passed into every call.
+
+**Time:** all stored timestamps are UTC (`jiff::Timestamp`). A `LocalCalendar`
+(timezone from config, default `Europe/Oslo`) answers: hour-start for a timestamp,
+local date for an hour, hours in a day. Must be correct across DST (23- and 25-hour
+days). Hour keys are UTC hour starts; "day" for the top-3 rule is the **local** date.
+
+**Tariff:** `CapacityTariff { tiers: Vec<Tier { from: Kw, to: Option<Kw>, price: Kr }> }`
+with `tier_for(avg: Kw) -> TierIndex` (bands are half-open `[from, to)`). The struct has room for `EnergyTariff`
+(day/night/weekend windows) later; do not implement it now beyond the type stub if it
+costs coverage — prefer leaving it out entirely.
+
+**Inputs** (enum, exhaustive):
+- `MeterCumulative { at, total: Kwh }` — cumulative import register (usually hourly)
+- `MeterPower { at, power: Kw }` — instant import power (every few seconds)
+- `ThermostatSetpoint { zone, at, value: Celsius }` — reported setpoint
+- `ZonePower { zone, at, power: Kw }` — optional, if the thermostat reports power
+- `SetMode(Mode)` — `Off | Observe | Active`
+- `SetShedAllowed { zone, allowed: bool }`
+- `Tick { at }`
+
+**Outputs** (enum):
+- `WriteSetpoint { zone, value: Celsius }`
+- `PublishStatus(Status)` — mode, guard active, per-zone shed state, projection, limit
+- `PersistHour { hour_start, kwh }`
+- `PersistZoneWrite { zone, value, at }`
+- `PersistOverride { zone, until: Option<Timestamp> }`
+
+**Energy accounting (`energy` module):**
+- Hour kWh comes primarily from deltas of the cumulative register at hour boundaries
+  (this matches billing). If the boundary reading is late, attribute by linear
+  interpolation between the two surrounding readings.
+- Within the current hour, `used_so_far` is the last cumulative reading's delta plus
+  the integral of `MeterPower` since that reading (trapezoidal).
+- If no cumulative reading exists at all yet, fall back to integrating power only, and
+  mark the hour `Estimated`.
+- `projected = used_so_far + current_power × remaining_fraction_of_hour`, where
+  `current_power` is a short moving average (configurable window, default 60 s) to
+  avoid reacting to a kettle spike.
+- Data freshness: if no `MeterPower` for `stale_after` (default 120 s), the meter is
+  `Stale`.
+
+**Monthly peaks (`peaks` module):**
+- From completed hours of the current local month, compute each local day's max hour,
+  and the top 3 days.
+- `allowed_hour_kwh(month_state, today, target_tier) -> Kwh`: the largest value `x` such
+  that, if the current hour ends at `x` (and so today's daily max becomes
+  `max(today_max_so_far, x)`), the resulting top-3 average stays within `target_tier`.
+  Consequences that must be covered by tests:
+  - Early in the month (fewer than 3 days), the limit is the tier boundary itself.
+  - If today already has a higher hour than `x` would be, the limit is relaxed up to the
+    value that still keeps the average in tier.
+  - If 3 other days already exceed the boundary such that the tier is already lost, the
+    limit becomes "don't make it worse" (do not raise the average further into the
+    next tier), not "give up".
+  - Month rollover (local time) resets everything.
+- Effective limit used by the guard = `allowed_hour_kwh − safety_margin` (config, e.g.
+  0.3 kWh).
+
+**Zones:** `Zone { id, name, setpoint_topic, nominal_kw: Kw, priority: u8,
+shed_delta: CelsiusDelta (or shed_setpoint), min_setpoint, max_setpoint, shed_allowed }`.
+
+**Policies:** a policy looks at a read-only `Context { now, calendar, meter, month,
+zones, mode, overrides }` and returns proposals.
+
+```rust
+pub trait Policy {
+    fn name(&self) -> PolicyName;
+    fn propose(&self, ctx: &Context<'_>) -> Vec<Proposal>;
+}
+
+pub struct Proposal { pub zone: ZoneId, pub kind: ProposalKind, pub reason: Reason }
+
+pub enum ProposalKind {
+    Base(Celsius),               // what the zone "wants" absent other constraints
+    Adjust(CelsiusDelta),        // future: weather, tariff shifting
+    Cap(Celsius),                // upper limit (peak guard)
+    Override(Celsius),           // human wins
+}
+```
+
+Phase 1 policies:
+1. **`UserSetpointBase`** — the base for each zone is the user's own setpoint, learned
+   from `ThermostatSetpoint` reports that are *not* echoes of our own writes (an echo =
+   within ±0.25 °C of our last write, regardless of elapsed time, until a different value
+   is reported; the learned base is persisted so a restart mid-shed never adopts the shed
+   value as base). This makes
+   phase 1 non-invasive: heating stays "always on" at whatever the user set, and the
+   guard only dips it temporarily. A future `SchedulePolicy` replaces this.
+2. **`PeakGuard`** — if `projected > effective_limit`, choose zones to shed in ascending
+   priority (lowest priority number sheds first — document the convention), skipping
+   zones with `shed_allowed = false` or an active override, until the expected reduction
+   `Σ zone_load × remaining_fraction` covers the excess. `zone_load` = last reported
+   `ZonePower` (Z-Wave reports on change, so it is a last-known value, not freshness-gated;
+   a zone whose relay is off contributes 0), else `nominal_kw` until the first report.
+   Emits `Cap(base − shed_delta)` (per-zone `shed_delta`, default 4 °C, clamped to
+   `min_setpoint`).
+   - **Hysteresis:** release a zone only when `projected < effective_limit − release_margin`
+     and the zone has been shed for at least `min_shed_duration`.
+   - **Hour rollover:** no forced release. The new hour's budget starts fresh and the
+     normal hysteresis decides. All releases are **staggered** (`restore_stagger`, e.g.
+     2 min apart in reverse shed order) so all floors don't start at once.
+   - **Stale meter:** guard proposes nothing (all zones restore) and status reports
+     `MeterStale`.
+3. **`ManualOverride`** — if the user raises a setpoint above the cap while the zone is
+   shed (a non-echo report), treat it as an override for `override_duration` (default
+   2 h): propose `Override(value)` and exclude the zone from shedding until it expires.
+   A non-echo report at or below the cap just becomes the new base (no override). When an
+   override expires its value remains the base. Overrides persist across restarts.
+
+**Arbiter:** pure function `arbitrate(zone, proposals) -> Decision { value, reasons }`:
+`Base` (required; if absent → no decision, don't touch the zone) → sum of `Adjust` →
+min of all `Cap` → `Override` replaces everything → clamp to `[min_setpoint,
+max_setpoint]`. Every decision carries the list of contributing reasons, and they go out
+in status, `/api/state` and `tracing` logs.
+
+**Actuator:** turns decisions into `WriteSetpoint` outputs only when needed:
+deadband (default 0.25 °C), per-zone minimum interval between writes (default 60 s,
+except restores, which are never delayed beyond the stagger), and never in `Observe` or
+`Off` mode. In `Observe`, it still computes "would write" and reports it in
+status/metrics. In `Off`, the engine restores every zone it has changed back to base
+once, then does nothing else.
+
+**Engine:** `Engine::new(config, persisted_state)`,
+`Engine::handle(&mut self, input: Input) -> Vec<Output>`. `Tick` drives evaluation
+(default every 10 s). The engine is the single owner of state, with no interior
+mutability or locks.
+
+**Startup safety:** on start the engine loads persisted state. Any zone whose last
+written value differs from the base it would choose now gets restored (unless the guard
+legitimately wants it shed this hour). Default mode on first ever start: `Observe`.
+
+### Adapters
+
+**energybrain-config:** TOML file path from `ENERGYBRAIN_CONFIG` env/CLI arg. Validates:
+unique zone ids, tiers sorted and contiguous, margins non-negative, setpoint bounds
+sane, topics non-empty. Errors are typed and point at the offending key.
+
+**energybrain-mqtt** (`rumqttc`, async):
+- Topic → Input mapping is fully config-driven (no hardcoded device topics). HAN payloads
+  are raw Kaifa HDLC/DLMS frames from a Tibber Pulse and are decoded by
+  `energybrain-han` (list 1/2 → `MeterPower`, hourly list 3 → `MeterCumulative`, using
+  the meter's own frame timestamp). Thermostat payloads are plain numbers (Z-Wave JS UI
+  "value only").
+- Output → publish: setpoint writes to `<setpoint_topic>/set` with a plain number
+  payload; status topics retained.
+- Easy MQTT control/status topics (prefix configurable, default `energybrain`):
+  - `energybrain/mode` (retained state) + `energybrain/mode/set` — `off|observe|active`.
+    For HomeKit, also `energybrain/active` + `/set` as an on/off switch meaning
+    `active` vs `observe`.
+  - `energybrain/peakguard/active` — `1/0` (contact sensor)
+  - `energybrain/zone/<id>/shed_allowed` + `/set` — `1/0` (switch)
+  - `energybrain/zone/<id>/shed` — `1/0` (state)
+  - `energybrain/status` — JSON snapshot (for debugging and maybe later use)
+- Reconnect is rumqttc's event loop. The adapter resubscribes on `ConnAck` and
+  republishes retained status.
+- The adapter is split into a **pure translation layer** (topic/payload ↔ Input/Output;
+  unit-tested exhaustively) and a **thin transport layer** (rumqttc). The transport is
+  covered by integration tests against an **embedded `rumqttd` broker started in-process
+  on a random port** (dev-dependency). Fallback if `rumqttd` turns out to be
+  impractical: `testcontainers` with Mosquitto. Decide in M7 and record the decision in
+  CLAUDE.md.
+
+**energybrain-store** (`rusqlite` with the `bundled` feature):
+- `trait Store { load() -> PersistedState; apply(&[Output]) }`, plus an in-memory
+  implementation for engine tests.
+- Tables: `hourly_energy(hour_start_utc INTEGER PK, kwh REAL, quality TEXT)`,
+  `zone_writes(zone TEXT PK, value REAL, at INTEGER)`,
+  `overrides(zone TEXT PK, until INTEGER NULL)`, `settings(key TEXT PK, value TEXT)`
+  (mode, shed_allowed per zone). Schema migrations run on open, with a
+  `schema_version` table.
+- Daily peaks are **derived** from `hourly_energy`, not stored separately.
+- Tested against in-memory and tempfile databases.
+- The async app calls it from a dedicated blocking task (`spawn_blocking` or a
+  channel-fed thread).
+
+**energybrain-http** (`axum`):
+- `GET /healthz` — 200 when the engine loop is alive, MQTT is connected and the meter
+  isn't stale; 503 with a JSON reason otherwise.
+- `GET /metrics` — Prometheus text via `metrics` + `metrics-exporter-prometheus`.
+- `GET /api/state` — JSON: mode, current hour, used_so_far, projection, limit, top-3
+  days, tier, per-zone base/decision/reasons/shed state, overrides.
+- Tested with `tower::ServiceExt::oneshot`, no real socket needed.
+
+**Metrics (names fixed now so the dashboard can be built against them):**
+`energybrain_hour_used_kwh`, `energybrain_hour_projected_kwh`, `energybrain_hour_limit_kwh`,
+`energybrain_meter_power_kw`, `energybrain_month_top_kwh{rank="1|2|3"}`,
+`energybrain_month_avg_top3_kwh`, `energybrain_tier`, `energybrain_zone_setpoint_celsius{zone,kind="base|decision|reported"}`,
+`energybrain_zone_shed{zone}`, `energybrain_zone_would_write_total{zone}` (observe mode),
+`energybrain_zone_writes_total{zone}`, `energybrain_meter_last_seen_seconds`,
+`energybrain_mqtt_connected`, `energybrain_mode{mode}`.
+
+### App (energybrain binary)
+- `lib.rs`: `run(config, clock, mqtt, store, shutdown) -> Result<()>`: a `tokio::select!`
+  loop over MQTT inputs, tick interval, HTTP state requests (via `watch` channel of
+  the latest state snapshot), and shutdown. Fully tested with fakes plus one
+  end-to-end test (embedded broker + tempfile SQLite + SimClock-driven ticks).
+- `main.rs`: **only** plumbing: parse args/env, init `tracing-subscriber` (JSON logs
+  when `ENERGYBRAIN_LOG_FORMAT=json`), build real adapters, install the SIGTERM/SIGINT
+  handler, call `run`. It is the only file excluded from coverage, so keep it under
+  ~60 lines with no branches worth testing.
+
+---
+
+## 3. Crates (pin at latest compatible versions when adding)
+
+| Purpose | Crate |
+|---|---|
+| Runtime | `tokio` (rt-multi-thread, macros, time, signal, sync) |
+| MQTT | `rumqttc` (dev: `rumqttd`) |
+| Time/TZ | `jiff` |
+| Serde | `serde`, `serde_json`, `toml` |
+| SQLite | `rusqlite` (`bundled`) |
+| HTTP | `axum`, `tower` (dev, `util`) |
+| Metrics | `metrics`, `metrics-exporter-prometheus` |
+| Logging | `tracing`, `tracing-subscriber` |
+| Errors | `thiserror` (libraries); `anyhow` only in `main.rs` if at all |
+| Testing | `proptest`, `insta` (yaml/json), `tempfile`, `pretty_assertions` |
+| Coverage | `cargo-llvm-cov` (tool, not dependency) |
+
+Avoid adding anything else without noting why in CLAUDE.md.
+
+---
+
+## 4. Testing & coverage policy
+
+- **Gate:** `cargo llvm-cov --workspace --all-features --fail-under-lines 100
+  --ignore-filename-regex '(^|/)main\.rs$'`. Wired into `just cov` and CI.
+- No coverage-exclusion attributes or `cfg(coverage)` tricks. If a line can't be tested,
+  refactor it (inject the dependency, split pure from effectful), don't hide it.
+- Prefer making invalid states unrepresentable over defensive branches that can never
+  run (those are uncoverable by definition).
+- **Kinds of tests:**
+  - Unit tests next to the code for every module.
+  - **Property tests** (`proptest`):
+    - the arbiter output is always within `[min, max]`;
+    - a zone with `shed_allowed=false` or an active override is never capped;
+    - `allowed_hour_kwh` never yields a top-3 average in a tier above the target when
+      that was avoidable;
+    - hour accounting sums equal the total cumulative delta;
+    - DST: every UTC hour maps to exactly one local date, and local days have 23/24/25
+      hours.
+  - **Scenario/replay tests:** `tests/fixtures/*.csv` traces (timestamp, power,
+    cumulative, optional setpoint events) fed through `Engine` with `SimClock`.
+    Assert outputs and snapshot the decision log with `insta`. Required scenarios:
+    1. quiet hour → no action
+    2. evening spike → sheds lowest-priority zone first, then more, restores with
+       hysteresis
+    3. spike in the last 5 min of the hour vs the first 5 min (different reductions
+       needed)
+    4. kettle blip shorter than the averaging window → no action
+    5. stale meter mid-shed → all restore
+    6. user raises setpoint while shed → override, zone excluded for duration
+    7. hour rollover → staggered restore
+    8. observe mode → zero `WriteSetpoint`, non-zero "would write"
+    9. third distinct day already above boundary → relaxed limit behaviour
+    10. month rollover
+    11. DST forward (March) and back (October) days
+    12. restart mid-shed → correct restore/continue from persisted state
+  - **Adapter integration tests:** embedded broker for MQTT, tempfile SQLite,
+    `oneshot` for HTTP.
+- `just check` = `cargo fmt --check && cargo clippy --workspace --all-targets
+  --all-features -- -D warnings && cargo test --workspace --all-features && just cov`.
+
+---
+
+## 5. Milestones
+
+Each milestone: write tests alongside the code, finish with `just check` green, commit
+with a descriptive message. Don't start the next milestone with a red gate.
+
+**M0 — Discovery (ask the user before writing adapter code).** Ask for, and record the
+answers in `config/example.toml` comments and CLAUDE.md:
+1. HAN reader model, its MQTT topics, and a sample payload for both instant power and
+   cumulative import (and their units).
+2. For each floor-heating zone: thermostat model, Z-Wave JS UI setpoint value topic, a
+   sample payload, whether it reports power (and that topic), nominal heater kW, and
+   desired shed priority.
+3. Grid company and its capacity tier table (kW bands and kr/month).
+4. Target tier, MQTT broker host/port/auth, and where the container will run.
+M1–M6 need none of this, so they can be done in parallel with waiting for answers.
+
+**M1 — Skeleton & tooling.** Workspace, crates with empty `lib.rs`, shared
+`[workspace.lints]` (`unsafe_code = "forbid"`, clippy pedantic as warn with a short
+allow-list), `justfile`, `rust-toolchain.toml` (stable), CI workflow
+(fmt, clippy, test, coverage gate), and the `.gitignore`. Initialise git.
+
+**M2 — Core foundations.** Units, `Clock`/`SimClock`, `LocalCalendar` with DST tests,
+`CapacityTariff`, ids, error types.
+
+**M3 — Energy accounting.** Meter state, hourly kWh from cumulative deltas plus
+interpolation, power integration, moving average, projection, staleness.
+
+**M4 — Monthly peaks & limit.** Top-3 distinct-day computation, `allowed_hour_kwh`, month
+rollover. This is the heart of the guard, so property-test it heavily.
+
+**M5 — Zones, policies, arbiter, actuator.** `UserSetpointBase` (with echo detection),
+`PeakGuard` (selection, hysteresis, stagger, stale handling), `ManualOverride`,
+`arbitrate`, actuator diffing and modes.
+
+**M6 — Engine & scenario tests.** `Engine::handle`, persisted-state load/apply,
+startup safety, and all 12 replay scenarios with fixtures and snapshots.
+
+**M7 — Config + MQTT adapter.** TOML schema and `config/example.toml`, the translation
+layer, the rumqttc transport, the embedded-broker integration tests, and the Easy MQTT
+topics.
+
+**M8 — Store + HTTP.** SQLite store and migrations, `/healthz`, `/metrics`,
+`/api/state`.
+
+**M9 — App wiring & deployment.** `run()` loop, `main.rs`, the end-to-end test, a
+multi-stage `Dockerfile` (build on `rust:<stable>`, run on `gcr.io/distroless/cc` or
+static musl on `scratch`, non-root, `/data` volume for SQLite, `/config` for TOML),
+`docker-compose.yml` with VictoriaMetrics scraping `/metrics` and Grafana with a
+provisioned peak-guard dashboard (projection vs limit, power, top-3, zone setpoints and
+shed bands).
+
+**M10 — Docs & go-live checklist.** README covering what it does, configuration
+reference, Easy MQTT accessory config snippets for each topic above, how to run in
+observe mode, and how to read the dashboard. Go-live checklist: 2+ weeks in observe
+mode with no false sheds, verify "would write" events against real evenings, then
+switch the HomeKit switch to active.
+
+---
+
+## 6. Extending later (design must keep these one-module changes)
+
+| Future feature | How it plugs in |
+|---|---|
+| Schedules / comfort profiles (idea A) | New `SchedulePolicy` emitting `Base`, replacing `UserSetpointBase` per zone via config |
+| Presence / away | New `Input::Presence`, a policy emitting `Adjust` (negative) or `Base` |
+| Night/weekend tariff shifting (C) | `EnergyTariff` + Norwegian holidays in core, `TariffShiftPolicy` emitting `Adjust` (pre-heat at night, coast in the day) |
+| Weather compensation (E) | New adapter crate `energybrain-metno` (reqwest) + outdoor sensor topic → `Input::Forecast`/`Input::OutdoorTemp`, `WeatherPolicy` emitting `Adjust` |
+| Heat pump coordination (B) | New zone kind/actuator for the heat pump driver over MQTT, plus a policy that lowers floor base when the heat pump is carrying the load |
+| 5 000 kWh Norgespris cap | Monthly kWh already derivable from `hourly_energy`. Add a spot-price adapter and a policy activated above the cap |
+| Optimiser (F) | `energybrain-planner` crate using `good_lp` + `microlp`, producing a per-hour plan the `PlanPolicy` follows, still subject to `PeakGuard` caps |
+| Custom UI | Extend `energybrain-http` with endpoints and static assets |
+
+Adding an `Input` variant or `ProposalKind` variant should cause compile errors at every
+place that must handle it. Don't use `_ =>` catch-alls on these enums.

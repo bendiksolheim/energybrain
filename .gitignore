@@ -1,0 +1,8 @@
+/target
+lcov.info
+# Real configs carry broker credentials; only config/example.toml is committed.
+/config/*.toml
+!/config/example.toml
+*.db
+*.db-*
+.env
