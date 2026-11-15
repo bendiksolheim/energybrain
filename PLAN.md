@@ -258,8 +258,9 @@ in status, `/api/state` and `tracing` logs.
 deadband (default 0.25 °C), per-zone minimum interval between writes (default 60 s,
 except restores, which are never delayed beyond the stagger), and never in `Observe` or
 `Off` mode. In `Observe`, it still computes "would write" and reports it in
-status/metrics. In `Off`, the engine restores every zone it has changed back to base
-once, then does nothing else.
+status/metrics. **Leaving `Active`** (to `Observe` or `Off`) first writes every zone we
+changed back to its base, as the last act of `Active`, then switches; after that nothing
+is written (user decision). In `Off` the guard is disabled entirely.
 
 **Engine:** `Engine::new(config, persisted_state)`,
 `Engine::handle(&mut self, input: Input) -> Vec<Output>`. `Tick` drives evaluation

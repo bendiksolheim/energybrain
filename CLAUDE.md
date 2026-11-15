@@ -15,7 +15,9 @@ keep it up to date if a decision changes.
 - Physical quantities use the unit newtypes (`Kw`, `Kwh`, `Celsius`, …), never bare `f64`, across module boundaries.
 - Store timestamps in UTC. Local time (`Europe/Oslo` by default) is used only through `LocalCalendar`, for hour and day bucketing. Test DST days explicitly.
 - No `_ =>` catch-all arms on `Input`, `Output` or `ProposalKind`.
-- Never write setpoints in `Observe` or `Off` mode. Every setpoint decision carries reasons.
+- Never write setpoints in `Observe` or `Off` mode. One exception, agreed with the user: leaving
+  `Active` first writes every zone we changed back to its base (the last act of `Active`), then
+  switches mode. Every setpoint decision carries reasons.
 - `unsafe_code = "forbid"`. Library crates use `thiserror`. No `unwrap()`/`expect()` in non-test code unless the invariant is documented in a comment right next to it.
 - Don't add dependencies beyond those listed in PLAN.md §3 without recording why below.
 
@@ -55,7 +57,7 @@ keep it up to date if a decision changes.
   10–15 585, 15–20 775, 20–25 964, 25–50 1655, 50–75 2599, 75–100 3544, 100–150 5117,
   150–200 7003, 200–300 10147, 300–400 13925, 400–500 17697, >500 21473.
   Energy charge (later): day 06–22 37.79 øre/kWh, night 22–06 23.79 øre/kWh (no separate weekend
-  rate in the table). Capacity basis assumed **hourly** (not confirmed with Tensio).
+  rate in the table; source: `docs/tier-table.md`). Capacity basis assumed **hourly** (not confirmed with Tensio).
 - Target tier: **2–5 kW** (limit 5 kWh/h − 0.3 margin). Observe mode reports hours where it
   is unreachable (EV charging) to judge whether the target is realistic.
 - Runtime host: Docker on amd64. No metrics stack: Grafana/VictoriaMetrics dropped from
