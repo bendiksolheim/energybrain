@@ -1,2 +1,8 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+# Time must come in as an argument (see `Clock`). Only the app's `SystemClock` may opt out.
+disallowed-methods = [
+  { path = "jiff::Timestamp::now", reason = "pass `now` in, or use a `Clock`" },
+  { path = "jiff::Zoned::now", reason = "pass `now` in, or use a `Clock`" },
+  { path = "std::time::SystemTime::now", reason = "pass `now` in, or use a `Clock`" },
+]
