@@ -134,3 +134,9 @@ keep it up to date if a decision changes.
 - Store: per-zone state (base, last write, learned power, shed permission, override) lives in one
   `zones` row instead of separate `zone_writes`/`overrides` tables. Events are stored as their
   JSON plus indexed `at`/`kind`/`zone` columns.
+- `/metrics` is rendered by hand in Prometheus text format from the latest `Status` plus write
+  counters (`energybrain-http::Metrics`) instead of using `metrics` +
+  `metrics-exporter-prometheus`: those need a process-global recorder, which is awkward to test
+  and adds two dependencies. Metric names are unchanged from PLAN.md.
+- `/healthz` is 503 with reasons when: no status yet, the last status is older than 30 s (engine
+  loop stalled), the meter is stale/has no data, or MQTT is disconnected.

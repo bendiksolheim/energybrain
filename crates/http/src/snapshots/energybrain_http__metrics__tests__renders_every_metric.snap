@@ -1,0 +1,38 @@
+---
+source: crates/http/src/metrics.rs
+assertion_line: 237
+expression: "m.render(Some(&status()), true)"
+---
+# TYPE energybrain_mqtt_connected gauge
+energybrain_mqtt_connected 1
+# TYPE energybrain_hour_used_kwh gauge
+energybrain_hour_used_kwh 1.5
+# TYPE energybrain_hour_projected_kwh gauge
+energybrain_hour_projected_kwh 5.25
+# TYPE energybrain_hour_limit_kwh gauge
+energybrain_hour_limit_kwh 4.7
+# TYPE energybrain_meter_power_kw gauge
+energybrain_meter_power_kw 6
+# TYPE energybrain_meter_last_seen_seconds gauge
+energybrain_meter_last_seen_seconds 1794763198
+# TYPE energybrain_month_top_kwh gauge
+energybrain_month_top_kwh{rank="1"} 4.5
+energybrain_month_top_kwh{rank="2"} 4
+# TYPE energybrain_month_avg_top3_kwh gauge
+energybrain_month_avg_top3_kwh 4.25
+# TYPE energybrain_tier gauge
+energybrain_tier 1
+# TYPE energybrain_mode gauge
+energybrain_mode{mode="off"} 0
+energybrain_mode{mode="observe"} 1
+energybrain_mode{mode="active"} 0
+# TYPE energybrain_zone_setpoint_celsius gauge
+energybrain_zone_setpoint_celsius{zone="bad",kind="base"} 26.5
+energybrain_zone_setpoint_celsius{zone="bad",kind="decision"} 22.5
+energybrain_zone_setpoint_celsius{zone="bad",kind="reported"} 26.5
+# TYPE energybrain_zone_shed gauge
+energybrain_zone_shed{zone="bad"} 1
+# TYPE energybrain_zone_writes_total counter
+energybrain_zone_writes_total{zone="bad"} 1
+# TYPE energybrain_zone_would_write_total counter
+energybrain_zone_would_write_total{zone="bad"} 2
