@@ -124,3 +124,13 @@ keep it up to date if a decision changes.
   — no Docker or testcontainers needed. Built from a TOML snippet since `rumqttd::Config` is serde.
 - MQTT retained status topics are published only when their payload changes and all re-sent on
   every `ConnAck`. Setpoint writes go to `<setpoint>/set`, QoS 1, not retained.
+- Coverage gotcha: llvm-cov's *summary* (what `--fail-under-lines` checks) sums each function's
+  own line coverage, so a line holding only a `?` error branch after a closure (e.g. `})?;` closing
+  a `query_map` closure) counts as missed even when `--show-missing-lines`/HTML show nothing. Fix
+  by making the closure a named function so the `?` shares a line with covered code. To find such
+  lines, export JSON (`cargo llvm-cov report --json`) and look for per-function zero regions.
+- Upgraded to **jiff 1.0** (released 2026-11-15) across all crates: `Zoned` → `ZonedDateTime`,
+  `to_zoned` → `to_zoned_datetime`. Keep every crate on the same jiff major.
+- Store: per-zone state (base, last write, learned power, shed permission, override) lives in one
+  `zones` row instead of separate `zone_writes`/`overrides` tables. Events are stored as their
+  JSON plus indexed `at`/`kind`/`zone` columns.

@@ -306,8 +306,8 @@ sane, topics non-empty. Errors are typed and point at the offending key.
 - `trait Store { load() -> PersistedState; apply(&[Output]) }`, plus an in-memory
   implementation for engine tests.
 - Tables: `hourly_energy(hour_start_utc INTEGER PK, kwh REAL, quality TEXT)`,
-  `zone_writes(zone TEXT PK, value REAL, at INTEGER)`,
-  `overrides(zone TEXT PK, until INTEGER NULL)`, `settings(key TEXT PK, value TEXT)`
+  `zones(zone TEXT PK, base, last_write, last_write_at, heating_kw, shed_allowed,
+  override_value, override_until)` (all nullable), `settings(key TEXT PK, value TEXT)`
   (mode, shed_allowed per zone), `zone_hourly_energy(zone TEXT, hour_start_utc INTEGER,
   kwh REAL, PK(zone, hour_start_utc))`, `zone_stats(zone TEXT PK, heating_kw REAL)`,
   `events(id INTEGER PK, at INTEGER, kind TEXT, zone TEXT NULL, detail TEXT)` (pruned

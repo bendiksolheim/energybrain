@@ -130,7 +130,7 @@ impl LocalCalendar {
 
     /// The first hour of a local date.
     pub fn first_hour(&self, date: Date) -> Result<HourStart, TimeError> {
-        let start = date.to_zoned(self.tz.clone())?.timestamp();
+        let start = date.to_zoned_datetime(self.tz.clone())?.timestamp();
         Ok(HourStart::containing(start))
     }
 
