@@ -28,17 +28,38 @@ keep it up to date if a decision changes.
 - MQTT broker: `192.168.1.172:1883`, no TLS, username + password. Credentials live only in a
   gitignored config file (`config/*.toml` except `example.toml` is ignored) — never commit them.
 - HAN reader + topics + payload format: Tibber Pulse (local MQTT) on a **Kaifa MA304H3E**
-  (3-phase, list id `KFM_001`). Payloads are **raw binary HDLC/DLMS frames**, not numbers/JSON.
-  Topic and hex samples: pending (M0 broker dump).
+  (3-phase, list id `KFM_001`, IT net: UL2 reads 0).
+  Topic **`tibber`**, one complete HDLC frame (`7e … 7e`) per message:
+  - 41 B list 1 every ~2.5 s: active import power (W, u32);
+  - 123 B list 2 every 10 s: list id, meter id, type, P+, P−, Q+, Q− (W/var), IL1–3 (mA),
+    UL1–3 (0.1 V);
+  - list 3 hourly at hh:00:10: list 2 + meter clock + cumulative A+, A−, R+, R− (Wh);
+  - ~400 B JSON `{"status":{…}}` from the Pulse itself — ignore.
+  The DLMS header carries a 12-byte date-time in **local time with deviation unspecified**
+  (`0x8000`); clock-status byte `0x00` in winter (DST bit `0x80` expected in summer).
 - Zones (id, setpoint topic, power topic, nominal kW, priority): Heatit **Z-TRM3**, via Z-Wave JS UI
-  in *value only* mode. Topics/priorities: pending (M0 broker dump).
+  in *value only* mode. Per device `zwave/<Room>/<Device>/`:
+  `67/1/setpoint/1` (heating setpoint °C, plain number; write to `…/set`, echoed twice within 1 s),
+  `50/1/value/66049` (power W, reported on change and roughly every 90 s, ~0.1 W when idle),
+  `50/1/value/65537` (kWh total), `66/1/state` (1 = heating, 0 = idle), `64/1/mode` (1 = heat),
+  `49/2` / `49/4` `Air_temperature` (room / floor sensor), `status` (`true` = alive).
+  Devices: `Bad/Gulv_bad`, `Gang/Gulv_gang`, `Kjeller/Gulv_kjeller`, `Utleie/Gulv_utleie_1`,
+  `Utleie/Gulv_utleie_2`, `Vaskerom/Varmekabel` (measured ~575 W when on).
+  Shed priority (lower sheds first, configurable): 1 `bad`, 2 `vaskerom`, 3 `gang`,
+  4 `utleie_1`, 5 `utleie_2`, 6 `kjeller` (already at 15 °C, little to gain). The Utleie
+  zones are a rental unit, currently empty: shedding allowed, but must stay switchable per
+  zone (HomeKit `shed_allowed`). Heater sizes unknown → learned from power reports
+  (`nominal_kw` default 1 kW until learned). `shed_delta` 4 °C everywhere (Kjeller → 11 °C ok).
+  `Stue/Kontakt_tak` is a ceiling-light switch: ignored.
 - Grid company + capacity tiers: **Tensio TS**. Tiers (kW, kr/month): 0–2 131, 2–5 233, 5–10 397,
   10–15 585, 15–20 775, 20–25 964, 25–50 1655, 50–75 2599, 75–100 3544, 100–150 5117,
   150–200 7003, 200–300 10147, 300–400 13925, 400–500 17697, >500 21473.
   Energy charge (later): day 06–22 37.79 øre/kWh, night 22–06 23.79 øre/kWh (no separate weekend
   rate in the table). Capacity basis assumed **hourly** (not confirmed with Tensio).
-- Target tier: undecided; user aims for 2–5 kW.
-- Runtime host: Docker on amd64. No metrics stack (Grafana/VictoriaMetrics) for now.
+- Target tier: **2–5 kW** (limit 5 kWh/h − 0.3 margin). Observe mode reports hours where it
+  is unreachable (EV charging) to judge whether the target is realistic.
+- Runtime host: Docker on amd64. No metrics stack: Grafana/VictoriaMetrics dropped from
+  compose; observe mode is reviewed via `/api/events`.
 - Other big loads: Easee Charge Lite EV charger (WiFi/cloud API, not controlled in phase 1),
   heat pump (not controllable). Both show up only in the whole-house meter reading.
 - HomeKit: Homebridge **Easy MQTT** plugin. Zigbee2MQTT also exists but is unrelated.
@@ -62,3 +83,18 @@ keep it up to date if a decision changes.
   the cap → becomes the new base, no override. An expired override's value remains the base.
 - No seeding of earlier peaks: history starts on deploy day (fewer known days ⇒ more conservative).
 - Tier bands are half-open `[from, to)`.
+- Meter timestamps: power readings (list 1/2) use **receive time** from the app's `Clock`
+  (staleness stays meaningful and consistent with ticks); the cumulative register (list 3)
+  uses the **meter's own clock** (hh:00:00, converted from local time via the calendar's zone),
+  so the hour value is `Measured` rather than interpolated across a 10 s delay.
+- Hour energy is upserted: `Meter::advance` emits an `Estimated` value at rollover; the
+  register later supersedes it with `Measured`/`Interpolated`.
+- `clippy.toml` disallows `Timestamp::now`, `Zoned::now`, `SystemTime::now` workspace-wide;
+  only `SystemClock` may opt out with a local `#[allow]`.
+- Hour limit simplified (user decision): target tier bound, relaxed to today's highest
+  completed hour if higher, minus margin. No month-end relaxation, no "tier lost" mode.
+- Zones learn `heating_kw` (EMA of power reports > 50 W, persisted) and record per-zone hourly
+  kWh from the thermostat's counter (`50/1/value/65537`).
+- Persisted guard event log + `GET /api/events` replace dashboards for reviewing observe mode.
+- Kaifa frame date-times are local wall-clock time; the han crate resolves them with the
+  configured zone, using the DST status bit to pick the right side of the fall-back hour.

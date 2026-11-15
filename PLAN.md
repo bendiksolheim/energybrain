@@ -40,7 +40,8 @@ few weeks before going live.
 - Heat-pump coordination
 - Monthly 5 000 kWh Norgespris cap and spot-price fallback
 - Model-based optimiser (LP via `good_lp` + `microlp`)
-- Custom web UI (Grafana covers dashboards in phase 1)
+- Custom web UI and a metrics stack (user runs none; observe mode is reviewed through
+  `/api/events` and `/api/state`; `/metrics` is kept so Grafana can be added later)
 
 ---
 
@@ -129,6 +130,7 @@ costs coverage — prefer leaving it out entirely.
 - `MeterPower { at, power: Kw }` — instant import power (every few seconds)
 - `ThermostatSetpoint { zone, at, value: Celsius }` — reported setpoint
 - `ZonePower { zone, at, power: Kw }` — optional, if the thermostat reports power
+- `ZoneEnergy { zone, at, total: Kwh }` — optional, the thermostat's own kWh counter
 - `SetMode(Mode)` — `Off | Observe | Active`
 - `SetShedAllowed { zone, allowed: bool }`
 - `Tick { at }`
@@ -139,6 +141,10 @@ costs coverage — prefer leaving it out entirely.
 - `PersistHour { hour_start, kwh }`
 - `PersistZoneWrite { zone, value, at }`
 - `PersistOverride { zone, until: Option<Timestamp> }`
+- `PersistZoneHour { zone, hour_start, kwh }` and `PersistZoneStats { zone, heating_kw }`
+  (learned zone load, see Zones)
+- `PersistEvent(Event)` — guard decisions (shed / would shed / release / override /
+  limit unreachable) with reasons, for reviewing observe mode without a metrics stack
 
 **Energy accounting (`energy` module):**
 - Hour kWh comes primarily from deltas of the cumulative register at hour boundaries
@@ -157,22 +163,28 @@ costs coverage — prefer leaving it out entirely.
 **Monthly peaks (`peaks` module):**
 - From completed hours of the current local month, compute each local day's max hour,
   and the top 3 days.
-- `allowed_hour_kwh(month_state, today, target_tier) -> Kwh`: the largest value `x` such
-  that, if the current hour ends at `x` (and so today's daily max becomes
-  `max(today_max_so_far, x)`), the resulting top-3 average stays within `target_tier`.
-  Consequences that must be covered by tests:
-  - Early in the month (fewer than 3 days), the limit is the tier boundary itself.
-  - If today already has a higher hour than `x` would be, the limit is relaxed up to the
-    value that still keeps the average in tier.
-  - If 3 other days already exceed the boundary such that the tier is already lost, the
-    limit becomes "don't make it worse" (do not raise the average further into the
-    next tier), not "give up".
-  - Month rollover (local time) resets everything.
-- Effective limit used by the guard = `allowed_hour_kwh − safety_margin` (config, e.g.
-  0.3 kWh).
+- `hour_limit(ledger, calendar, hour, target, margin) -> HourLimit` (decided with the user;
+  deliberately simple):
+  - `allowed` = the target tier's upper bound (kWh/h), raised to today's highest
+    completed hour if that is higher (only each day's max counts, so that is free);
+  - `effective = allowed − safety_margin` (config, default 0.3 kWh) is what the guard
+    acts on;
+  - no month-end relaxation and no "tier already lost" mode: always aim for the target
+    tier, since lower use never costs more;
+  - month rollover (local time) resets the ledger.
+- Top-3 average and current tier are still computed for status.
 
-**Zones:** `Zone { id, name, setpoint_topic, nominal_kw: Kw, priority: u8,
-shed_delta: CelsiusDelta (or shed_setpoint), min_setpoint, max_setpoint, shed_allowed }`.
+**Zones:** `Zone { id, name, setpoint_topic, power_topic, energy_topic, nominal_kw: Kw
+(optional, default 1 kW), priority: u8, shed_delta: CelsiusDelta, min_setpoint,
+max_setpoint, shed_allowed }`. Priority, `shed_allowed` and `shed_delta` are config;
+`shed_allowed` can also be toggled at runtime from HomeKit (persisted, wins over config).
+
+**Zone learning (user request: "monitor the usage constantly and learn"):** each zone
+learns `heating_kw`, an exponential moving average of its power reports while heating
+(above 50 W), persisted across restarts. Its kWh counter gives per-zone hourly energy,
+persisted for review. Phase 1 uses `heating_kw` only as the load estimate before a
+zone's first power report after a restart (replacing `nominal_kw` once learned); later
+phases can use the per-zone history for prediction.
 
 **Policies:** a policy looks at a read-only `Context { now, calendar, meter, month,
 zones, mode, overrides }` and returns proposals.
@@ -206,7 +218,7 @@ Phase 1 policies:
    zones with `shed_allowed = false` or an active override, until the expected reduction
    `Σ zone_load × remaining_fraction` covers the excess. `zone_load` = last reported
    `ZonePower` (Z-Wave reports on change, so it is a last-known value, not freshness-gated;
-   a zone whose relay is off contributes 0), else `nominal_kw` until the first report.
+   a zone whose relay is off contributes 0), else learned `heating_kw`, else `nominal_kw`.
    Emits `Cap(base − shed_delta)` (per-zone `shed_delta`, default 4 °C, clamped to
    `min_setpoint`).
    - **Hysteresis:** release a zone only when `projected < effective_limit − release_margin`
@@ -214,6 +226,10 @@ Phase 1 policies:
    - **Hour rollover:** no forced release. The new hour's budget starts fresh and the
      normal hysteresis decides. All releases are **staggered** (`restore_stagger`, e.g.
      2 min apart in reverse shed order) so all floors don't start at once.
+   - **Unreachable limit:** if shedding every allowed zone still cannot bring the
+     projection under the limit (e.g. EV charging), shed them all anyway and report
+     `LimitUnreachable` in status and events, so observe mode shows whether the target
+     tier is realistic.
    - **Stale meter:** guard proposes nothing (all zones restore) and status reports
      `MeterStale`.
 3. **`ManualOverride`** — if the user raises a setpoint above the cap while the zone is
@@ -281,7 +297,10 @@ sane, topics non-empty. Errors are typed and point at the offending key.
 - Tables: `hourly_energy(hour_start_utc INTEGER PK, kwh REAL, quality TEXT)`,
   `zone_writes(zone TEXT PK, value REAL, at INTEGER)`,
   `overrides(zone TEXT PK, until INTEGER NULL)`, `settings(key TEXT PK, value TEXT)`
-  (mode, shed_allowed per zone). Schema migrations run on open, with a
+  (mode, shed_allowed per zone), `zone_hourly_energy(zone TEXT, hour_start_utc INTEGER,
+  kwh REAL, PK(zone, hour_start_utc))`, `zone_stats(zone TEXT PK, heating_kw REAL)`,
+  `events(id INTEGER PK, at INTEGER, kind TEXT, zone TEXT NULL, detail TEXT)` (pruned
+  after 90 days). Schema migrations run on open, with a
   `schema_version` table.
 - Daily peaks are **derived** from `hourly_energy`, not stored separately.
 - Tested against in-memory and tempfile databases.
@@ -293,7 +312,9 @@ sane, topics non-empty. Errors are typed and point at the offending key.
   isn't stale; 503 with a JSON reason otherwise.
 - `GET /metrics` — Prometheus text via `metrics` + `metrics-exporter-prometheus`.
 - `GET /api/state` — JSON: mode, current hour, used_so_far, projection, limit, top-3
-  days, tier, per-zone base/decision/reasons/shed state, overrides.
+  days, tier, per-zone base/decision/reasons/shed state, learned `heating_kw`, overrides.
+- `GET /api/events?since=<rfc3339>&limit=<n>` — persisted guard events (shed, would-shed,
+  release, override, limit unreachable) with reasons, newest first.
 - Tested with `tower::ServiceExt::oneshot`, no real socket needed.
 
 **Metrics (names fixed now so the dashboard can be built against them):**
@@ -349,8 +370,8 @@ Avoid adding anything else without noting why in CLAUDE.md.
   - **Property tests** (`proptest`):
     - the arbiter output is always within `[min, max]`;
     - a zone with `shed_allowed=false` or an active override is never capped;
-    - `allowed_hour_kwh` never yields a top-3 average in a tier above the target when
-      that was avoidable;
+    - if no earlier day broke the target, ending the hour at the effective limit keeps the
+      top-3 average in the target tier;
     - hour accounting sums equal the total cumulative delta;
     - DST: every UTC hour maps to exactly one local date, and local days have 23/24/25
       hours.
@@ -367,7 +388,8 @@ Avoid adding anything else without noting why in CLAUDE.md.
     6. user raises setpoint while shed → override, zone excluded for duration
     7. hour rollover → staggered restore
     8. observe mode → zero `WriteSetpoint`, non-zero "would write"
-    9. third distinct day already above boundary → relaxed limit behaviour
+    9. today already has an hour above the bound → limit relaxed to it for the rest of
+       the day; an earlier *day* above the bound does not relax anything
     10. month rollover
     11. DST forward (March) and back (October) days
     12. restart mid-shed → correct restore/continue from persisted state
@@ -405,7 +427,7 @@ allow-list), `justfile`, `rust-toolchain.toml` (stable), CI workflow
 **M3 — Energy accounting.** Meter state, hourly kWh from cumulative deltas plus
 interpolation, power integration, moving average, projection, staleness.
 
-**M4 — Monthly peaks & limit.** Top-3 distinct-day computation, `allowed_hour_kwh`, month
+**M4 — Monthly peaks & limit.** Top-3 distinct-day computation, `hour_limit`, month
 rollover. This is the heart of the guard, so property-test it heavily.
 
 **M5 — Zones, policies, arbiter, actuator.** `UserSetpointBase` (with echo detection),
@@ -425,9 +447,8 @@ topics.
 **M9 — App wiring & deployment.** `run()` loop, `main.rs`, the end-to-end test, a
 multi-stage `Dockerfile` (build on `rust:<stable>`, run on `gcr.io/distroless/cc` or
 static musl on `scratch`, non-root, `/data` volume for SQLite, `/config` for TOML),
-`docker-compose.yml` with VictoriaMetrics scraping `/metrics` and Grafana with a
-provisioned peak-guard dashboard (projection vs limit, power, top-3, zone setpoints and
-shed bands).
+`docker-compose.yml` with energybrain only (amd64). VictoriaMetrics + Grafana are dropped
+for phase 1 (user decision); the metric names stay fixed so they can be added later.
 
 **M10 — Docs & go-live checklist.** README covering what it does, configuration
 reference, Easy MQTT accessory config snippets for each topic above, how to run in
@@ -447,6 +468,7 @@ switch the HomeKit switch to active.
 | Weather compensation (E) | New adapter crate `energybrain-metno` (reqwest) + outdoor sensor topic → `Input::Forecast`/`Input::OutdoorTemp`, `WeatherPolicy` emitting `Adjust` |
 | Heat pump coordination (B) | New zone kind/actuator for the heat pump driver over MQTT, plus a policy that lowers floor base when the heat pump is carrying the load |
 | 5 000 kWh Norgespris cap | Monthly kWh already derivable from `hourly_energy`. Add a spot-price adapter and a policy activated above the cap |
+| EV charger (Easee Charge Lite) | New adapter crate for Easee's cloud API, a controllable load with a current cap; `PeakGuard` treats it as a sheddable load before floors |
 | Optimiser (F) | `energybrain-planner` crate using `good_lp` + `microlp`, producing a per-hour plan the `PlanPolicy` follows, still subject to `PeakGuard` caps |
 | Custom UI | Extend `energybrain-http` with endpoints and static assets |
 

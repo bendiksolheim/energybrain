@@ -9,6 +9,7 @@
 pub mod clock;
 pub mod energy;
 pub mod ids;
+pub mod peaks;
 pub mod tariff;
 pub mod time;
 pub mod units;
