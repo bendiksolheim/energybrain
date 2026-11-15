@@ -275,28 +275,37 @@ impl Engine {
         }
     }
 
+    /// Restores every shed zone to its base before the service stops (Active mode only;
+    /// otherwise nothing was written). The persisted mode is unchanged, and the guard sheds
+    /// again after a restart if it still needs to.
+    pub fn shutdown(&mut self, at: Timestamp) -> Vec<Output> {
+        if self.mode != Mode::Active {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for s in std::mem::take(&mut self.guard.shed) {
+            out.push(self.event(
+                at,
+                EventKind::Guard {
+                    event: GuardEvent::Release {
+                        zone: s.zone,
+                        reason: ReleaseReason::GuardOff,
+                    },
+                },
+            ));
+        }
+        let decisions = self.decide(at);
+        out.extend(self.actuate_all(at, &decisions, Mode::Active));
+        out
+    }
+
     fn set_mode(&mut self, at: Timestamp, new: Mode) -> Vec<Output> {
         let old = self.mode;
         if new == old {
             return Vec::new();
         }
-        let mut out = Vec::new();
-        if old == Mode::Active {
-            // Undo every shed as the last act of Active mode.
-            for s in std::mem::take(&mut self.guard.shed) {
-                out.push(self.event(
-                    at,
-                    EventKind::Guard {
-                        event: GuardEvent::Release {
-                            zone: s.zone,
-                            reason: ReleaseReason::GuardOff,
-                        },
-                    },
-                ));
-            }
-            let decisions = self.decide(at);
-            out.extend(self.actuate_all(at, &decisions, Mode::Active));
-        }
+        // Undo every shed as the last act of Active mode.
+        let mut out = self.shutdown(at);
         if new == Mode::Active {
             for z in self.zones.values_mut() {
                 z.last_would_write = None;
@@ -783,7 +792,26 @@ mod tests {
         assert_eq!(active.guard.shed.len(), 1);
         assert_eq!(active.guard.shed[0].zone, id("bad"));
         assert_eq!(active.guard.shed[0].since, ts(T0));
-        let observe = engine(state(Mode::Observe));
+        let mut observe = engine(state(Mode::Observe));
         assert!(observe.guard.shed.is_empty());
+        assert!(
+            observe.shutdown(ts(T0)).is_empty(),
+            "nothing was written in observe"
+        );
+
+        // Shutting down in Active restores the shed zone and keeps the mode.
+        let mut active = engine(state(Mode::Active));
+        let out = active.shutdown(ts(T0));
+        assert!(out.contains(&Output::WriteSetpoint {
+            zone: id("bad"),
+            value: c(26.5),
+            reasons: vec![crate::policy::Reason {
+                policy: crate::policy::PolicyName::UserSetpointBase,
+                detail: "user setpoint 26.5 °C".to_owned(),
+            }],
+        }));
+        assert!(!out.iter().any(|o| matches!(o, Output::PersistMode(_))));
+        assert_eq!(active.mode(), Mode::Active);
+        assert!(active.guard.shed.is_empty());
     }
 }

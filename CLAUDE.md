@@ -140,3 +140,9 @@ keep it up to date if a decision changes.
   and adds two dependencies. Metric names are unchanged from PLAN.md.
 - `/healthz` is 503 with reasons when: no status yet, the last status is older than 30 s (engine
   loop stalled), the meter is stale/has no data, or MQTT is disconnected.
+- App: `run()` creates the MQTT link itself (subscriptions come from the translator); MQTT
+  events reach the `select!` loop through a forwarding task (cancel-safe), and the store runs on
+  its own thread fed by a channel. `/api/events` opens a separate SQLite connection per query.
+- Graceful stop (SIGTERM/Ctrl-C): `Engine::shutdown` restores shed zones in Active mode without
+  changing the persisted mode, then MQTT is flushed (disconnect + wait), and the store thread and
+  HTTP server are stopped.

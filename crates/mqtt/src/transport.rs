@@ -106,6 +106,12 @@ impl Link {
 }
 
 impl Publisher {
+    /// Queues a clean disconnect after everything already queued.
+    pub async fn disconnect(&self) -> Result<(), PublishError> {
+        self.0.disconnect().await?;
+        Ok(())
+    }
+
     /// Queues a message for publishing.
     pub async fn publish(&self, p: &Publish) -> Result<(), PublishError> {
         self.0
@@ -259,6 +265,12 @@ pub(crate) mod tests {
             (topic.as_str(), payload.as_slice()),
             ("energybrain/mode", b"observe".as_slice())
         );
+
+        our_pub.disconnect().await.unwrap();
+        wait_for(&mut ours, |e| {
+            matches!(e, TransportEvent::Disconnected(_)).then_some(())
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -306,5 +318,6 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().starts_with("mqtt publish failed"), "{err}");
+        assert!(publisher.disconnect().await.is_err());
     }
 }

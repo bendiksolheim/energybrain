@@ -7,6 +7,25 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+axum = "0.8.9"
+energybrain-config = { version = "0.1.0", path = "../config" }
+energybrain-core = { version = "0.1.0", path = "../core" }
+energybrain-http = { version = "0.1.0", path = "../http" }
+energybrain-mqtt = { version = "0.1.0", path = "../mqtt" }
+energybrain-store = { version = "0.1.0", path = "../store" }
+jiff = "1.0.0"
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "signal", "sync", "net"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+energybrain-core = { path = "../core", features = ["test-support"] }
+rumqttc = { version = "0.25.1", default-features = false }
+rumqttd = { version = "0.20.0", default-features = false }
+tempfile = "3.27.0"
+toml = "1.2.1"
