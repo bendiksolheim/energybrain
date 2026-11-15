@@ -6,3 +6,6 @@ disallowed-methods = [
   { path = "jiff::Zoned::now", reason = "pass `now` in, or use a `Clock`" },
   { path = "std::time::SystemTime::now", reason = "pass `now` in, or use a `Clock`" },
 ]
+
+# Proper names used in docs.
+doc-valid-idents = ["HomeKit", "SQLite", ".."]

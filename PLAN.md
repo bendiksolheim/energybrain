@@ -141,6 +141,7 @@ costs coverage — prefer leaving it out entirely.
 - `PersistHour { hour_start, kwh }`
 - `PersistZoneWrite { zone, value, at }`
 - `PersistOverride { zone, until: Option<Timestamp> }`
+- `PersistZoneBase { zone, value }` — the learned user setpoint (echo-safe restarts)
 - `PersistZoneHour { zone, hour_start, kwh }` and `PersistZoneStats { zone, heating_kw }`
   (learned zone load, see Zones)
 - `PersistEvent(Event)` — guard decisions (shed / would shed / release / override /
@@ -213,7 +214,16 @@ Phase 1 policies:
    value as base). This makes
    phase 1 non-invasive: heating stays "always on" at whatever the user set, and the
    guard only dips it temporarily. A future `SchedulePolicy` replaces this.
-2. **`PeakGuard`** — if `projected > effective_limit`, choose zones to shed in ascending
+2. **`PeakGuard`** — (implementation note: the shedding *decision* is stateful and lives in
+   `guard::GuardState::update`, owned by the engine; the `PeakGuardCaps` policy only turns
+   the current shed set into `Cap` proposals, so `Policy::propose` stays `&self`.)
+   Only zones currently drawing power (> `heating_threshold`) are candidates — shedding an
+   idle floor saves nothing now. The projection is reduced by a **credit** for shed zones
+   the meter cannot show yet: zones still drawing (always true in observe mode, where
+   nothing is written) and zones shed less than `settle` (default 90 s) ago. Without it
+   the guard would shed every zone in observe mode. A zone is released only if the
+   projection *with its load back* stays below `limit − release_margin`.
+   If `projected > effective_limit`, choose zones to shed in ascending
    priority (lowest priority number sheds first — document the convention), skipping
    zones with `shed_allowed = false` or an active override, until the expected reduction
    `Σ zone_load × remaining_fraction` covers the excess. `zone_load` = last reported
