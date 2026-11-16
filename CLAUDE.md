@@ -165,3 +165,8 @@ keep it up to date if a decision changes.
   (not `--workspace`): stale test binaries from the old rustc are otherwise merged into the
   report and show up as hundreds of missed lines. 1.100 also maps implicit `else`/`?` branches
   to lines more precisely, which exposed 4 real gaps (fixed).
+- Actuator: a write not yet echoed (`Zone::awaiting_echo`, not persisted, cleared by any
+  setpoint report) counts as the thermostat's current setpoint for `min_interval`; after that
+  it is presumed lost and the report wins (so it is retried). Without this, leaving Active or
+  shutting down right after a shed write saw the stale pre-write report equal to the base and
+  skipped the restore, leaving the zone shed (flaky e2e test on CI).

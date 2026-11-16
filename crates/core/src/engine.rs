@@ -403,6 +403,7 @@ impl Engine {
                 Actuation::None => {}
                 Actuation::Write(value) => {
                     z.last_write = Some((value, now));
+                    z.awaiting_echo = true;
                     out.push(Output::WriteSetpoint {
                         zone: z.id().clone(),
                         value,
@@ -816,5 +817,46 @@ mod tests {
         assert!(!out.iter().any(|o| matches!(o, Output::PersistMode(_))));
         assert_eq!(active.mode(), Mode::Active);
         assert_eq!(active.guard.shed, Vec::<Shed>::new());
+    }
+
+    /// Leaving Active right after a shed write, before the thermostat echoed it: its last
+    /// report still shows the base, yet the restore must be written (there is no later tick
+    /// to fix it).
+    #[test]
+    fn leaving_active_before_the_echo_still_restores() {
+        let mut e = engine(PersistedState {
+            mode: Some(Mode::Active),
+            ..PersistedState::default()
+        });
+        let t0 = ts(T0) + SignedDuration::from_mins(30);
+        e.handle(Input::ThermostatSetpoint {
+            zone: id("bad"),
+            at: t0,
+            value: c(26.5),
+        });
+        e.handle(Input::ZonePower {
+            zone: id("bad"),
+            at: t0,
+            power: Kw::new(1.5),
+        });
+        let is_write = |o: &Output, v: f64| matches!(o, Output::WriteSetpoint { zone, value, .. } if *zone == id("bad") && *value == c(v));
+        let mut now = t0;
+        while !e
+            .handle(Input::Tick { at: now })
+            .iter()
+            .any(|o| is_write(o, 22.5))
+        {
+            assert!(now < t0 + SignedDuration::from_mins(5), "never shed");
+            now += SignedDuration::from_secs(2);
+            e.handle(Input::MeterPower {
+                at: now,
+                power: Kw::new(9.0),
+            });
+        }
+        let out = e.handle(Input::SetMode {
+            at: now + SignedDuration::from_secs(1),
+            mode: Mode::Observe,
+        });
+        assert!(out.iter().any(|o| is_write(o, 26.5)), "{out:#?}");
     }
 }

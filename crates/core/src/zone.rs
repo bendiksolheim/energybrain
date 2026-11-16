@@ -82,6 +82,8 @@ pub struct Zone {
     pub reported: Option<Celsius>,
     /// Our last real write (persisted).
     pub last_write: Option<(Celsius, Timestamp)>,
+    /// No setpoint report has arrived since `last_write` (not persisted).
+    pub awaiting_echo: bool,
     /// Our last "would write" in observe mode, standing in for the thermostat's state.
     pub last_would_write: Option<(Celsius, Timestamp)>,
     /// Last power report.
@@ -104,6 +106,7 @@ impl Zone {
             base: None,
             reported: None,
             last_write: None,
+            awaiting_echo: false,
             last_would_write: None,
             power: None,
             heating_kw: None,
@@ -164,6 +167,7 @@ impl Zone {
         settings: &ZoneSettings,
     ) -> SetpointReport {
         self.reported = Some(value);
+        self.awaiting_echo = false;
         let tol = settings.echo_tolerance;
         if self
             .last_write
@@ -263,9 +267,11 @@ pub(crate) mod tests {
         let mut z = Zone::new(config("bad", 1));
         z.base = Some(c(26.5));
         z.last_write = Some((c(22.5), ts("2026-11-15T17:00:00Z")));
+        z.awaiting_echo = true;
         // Hours later (e.g. after a restart) the shed value is still an echo.
         let late = ts("2026-11-15T23:00:00Z");
         assert_eq!(z.on_setpoint(late, c(22.6), None, &s), SetpointReport::Echo);
+        assert!(!z.awaiting_echo);
         assert_eq!(z.base, Some(c(26.5)));
         assert_eq!(z.reported, Some(c(22.6)));
     }

@@ -51,16 +51,26 @@ pub fn actuate(
     restore: bool,
 ) -> Actuation {
     // In observe mode nothing reaches the thermostat, so our own would-writes stand in
-    // for its state; otherwise trust what it reports.
+    // for its state. Otherwise trust what it reports, except right after a write it has not
+    // echoed yet: the report predates the write. Without an echo within `min_interval` the
+    // write is presumed lost and the report wins again (so it is retried).
     let (current, last) = match mode {
         Mode::Observe => (
             zone.last_would_write.map(|(v, _)| v).or(zone.reported),
             zone.last_would_write,
         ),
-        Mode::Active | Mode::Off => (
-            zone.reported.or(zone.last_write.map(|(v, _)| v)),
-            zone.last_write,
-        ),
+        Mode::Active | Mode::Off => {
+            let unconfirmed = zone
+                .last_write
+                .filter(|&(_, at)| zone.awaiting_echo && now.duration_since(at) < cfg.min_interval)
+                .map(|(v, _)| v);
+            (
+                unconfirmed
+                    .or(zone.reported)
+                    .or(zone.last_write.map(|(v, _)| v)),
+                zone.last_write,
+            )
+        }
     };
     let close = |a: Celsius, b: Celsius| (a - b).abs() <= cfg.deadband;
     if current.is_some_and(|c| close(c, target)) {
@@ -175,6 +185,27 @@ mod tests {
         assert_eq!(
             actuate(&cfg, Mode::Active, &z, c(18.0), later, true),
             Actuation::Write(c(18.0))
+        );
+    }
+
+    /// Restoring right after a shed write, before the thermostat echoed it: its last report
+    /// still shows the base, but the shed value is what it will end up with.
+    #[test]
+    fn an_unconfirmed_write_counts_as_the_current_setpoint() {
+        let cfg = ActuatorConfig::default();
+        let mut z = zone(Some(26.5));
+        z.last_write = Some((c(22.5), ts(T0)));
+        z.awaiting_echo = true;
+        let soon = ts(T0) + SignedDuration::from_secs(1);
+        assert_eq!(
+            actuate(&cfg, Mode::Active, &z, c(26.5), soon, true),
+            Actuation::Write(c(26.5))
+        );
+        // No echo within a minute: the write is presumed lost and the report wins.
+        let later = ts(T0) + SignedDuration::from_secs(60);
+        assert_eq!(
+            actuate(&cfg, Mode::Active, &z, c(26.5), later, true),
+            Actuation::None
         );
     }
 
