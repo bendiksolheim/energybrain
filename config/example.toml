@@ -1,42 +1,60 @@
-# energybrain configuration — this is the real setup minus credentials.
+# energybrain configuration — the real setup of this house, minus credentials.
 #
-# Copy to e.g. config/local.toml (gitignored) or mount as /config/energybrain.toml, and set
-# ENERGYBRAIN_CONFIG to its path. Durations are in seconds or minutes as the key says.
-# Power is kW, energy kWh, temperatures °C.
+# Copy it to a gitignored location (deploy/energybrain.toml, or config/local.toml) and point
+# the service at it with ENERGYBRAIN_CONFIG or the first command-line argument. Units: power
+# in kW, energy in kWh, temperatures in °C; durations carry their unit in the key name.
+# Unknown keys are rejected, and any invalid value stops startup with the offending key named.
+# Keys shown commented out are optional and show their default.
 
-# Local time zone for day and month bucketing (the capacity tariff counts local days).
+# IANA time zone used to decide which local day and month an hour belongs to. The capacity
+# tariff counts local days, so this must match where the meter is; DST is handled for you.
 timezone = "Europe/Oslo"
 
 [mqtt]
+# Host name or IP address of the MQTT broker that Z-Wave JS UI, the Tibber Pulse and
+# Homebridge also use. Plain TCP only; TLS is not supported.
 host = "192.168.1.172"
+# Broker TCP port. 1883 is the standard unencrypted MQTT port.
 port = 1883
+# Client id this service connects with. It must be unique on the broker, or the broker will
+# keep disconnecting whichever client connected first.
 client_id = "energybrain"
+# Seconds between keep-alive pings. A broker that hears nothing for 1.5 × this considers the
+# connection dead; values below 5 are raised to 5.
 keep_alive_secs = 30
-# Prefix of our own topics for HomeKit / Easy MQTT (energybrain/mode, energybrain/zone/…).
+# Prefix of every topic this service publishes, or listens to for HomeKit (e.g. <prefix>/mode,
+# <prefix>/zone/bad/shed). Must not contain the MQTT wildcards + or #.
 # prefix = "energybrain"
-# Credentials: prefer the environment variables ENERGYBRAIN_MQTT_USERNAME and
-# ENERGYBRAIN_MQTT_PASSWORD, which override these keys. Never commit real values.
+# Broker credentials. Prefer the environment variables ENERGYBRAIN_MQTT_USERNAME and
+# ENERGYBRAIN_MQTT_PASSWORD, which override these keys; never commit real values.
 # username = ""
 # password = ""
 
 [http]
+# Address and port of the HTTP server (/healthz, /metrics, /api/state, /api/events).
+# 0.0.0.0 listens on all interfaces, which is what a Docker port mapping needs.
 listen = "0.0.0.0:8080"
 
 [store]
+# Path of the SQLite database holding hourly energy, learned zone state, overrides, the mode
+# and the event log. It is created on first start; in Docker it lives on the /data volume.
 path = "/data/energybrain.db"
 
 [meter]
-# Tibber Pulse in raw mode on a Kaifa MA304H3E: one HDLC frame per message.
-# List 1/2 (every 2.5 s / 10 s) give power, list 3 (hourly) the cumulative register.
+# Topic the Tibber Pulse publishes raw HAN frames to: power every 2.5 s and 10 s, and the
+# cumulative import register once an hour. The Pulse's own JSON status messages are ignored.
 topic = "tibber"
-# Moving average used for the projection, so a kettle does not trigger shedding.
+# Length of the moving average used as "current power" when projecting the rest of the hour.
+# Longer makes a kettle or oven spike less likely to trigger shedding, but reacts more slowly.
 power_window_secs = 60
-# No power reading for this long ⇒ meter stale ⇒ guard restores everything.
+# With no power reading for this many seconds the meter counts as stale: nothing new is shed,
+# every shed floor is restored (staggered), and /healthz reports unhealthy.
 stale_after_secs = 120
 
 [tariff]
-# Tensio TS 2026 capacity tiers (kapasitetsledd), see docs/tier-table.md.
-# Bands are half-open [from, to): an average of exactly 5.0 kW is in 5–10.
+# The grid company's capacity tiers: `to_kw` is each band's exclusive upper bound and `price`
+# its monthly cost in kr, and the last band has no `to_kw`. Bands are half-open, so an average
+# of exactly 5.0 kW falls in 5–10. These are Tensio TS 2026, see docs/tier-table.md.
 tiers = [
   { to_kw = 2, price = 131 },
   { to_kw = 5, price = 233 },
@@ -54,49 +72,86 @@ tiers = [
   { to_kw = 500, price = 17697 },
   { price = 21473 },
 ]
-# Upper bound of the tier to stay in; must be one of the `to_kw` values above.
+# Upper bound (kW) of the tier to stay in; it must equal one of the `to_kw` values above.
+# Each hour may then use this many kWh, or more if today has already had a higher hour.
 target_kw = 5
-# The guard acts on (allowed − margin) to leave room for projection error.
+# Headroom (kWh) subtracted from the allowed energy before the guard acts, to cover projection
+# error. A larger margin sheds earlier and more often, but makes breaking the tier less likely.
 safety_margin_kwh = 0.3
 
 [guard]
-# Release a zone only when the projection with it back on stays below limit − margin.
+# A shed floor is only restored when the projection with it switched back on stays this many
+# kWh below the limit. This hysteresis stops it from being restored and shed again a minute later.
 release_margin_kwh = 0.3
+# Minimum minutes a floor stays shed before it may be restored, so heaters do not cycle rapidly.
+# A user override, a stale meter or leaving active mode restores it without waiting.
 min_shed_minutes = 5
-# At most one zone is restored per this interval, so floors do not all start at once.
+# At most one floor is restored per this many minutes, the most recently shed first, so the
+# floors do not all switch back on at once and cause a new spike.
 restore_stagger_minutes = 2
-# How long a fresh shed is credited before the meter's average shows it.
+# Seconds a freshly shed floor's saving is credited before the meter's moving average is
+# trusted to show it. Without this the guard would shed extra floors while the average catches up.
 settle_secs = 90
 
 [actuator]
+# Setpoint differences up to this many °C are not worth a write, so a thermostat is never
+# rewritten over a rounding difference in what it reports back.
 deadband = 0.25
+# Minimum seconds between two writes that lower the same thermostat, to keep Z-Wave traffic
+# down. Writes that restore a floor are never delayed by this.
 min_interval_secs = 60
 
 [zones]
-# A user setpoint within this of our last write is our own echo.
+# A reported setpoint within this many °C of our own last write counts as the thermostat
+# echoing us, not as a user change. Keep it below the thermostat's setpoint step (Z-TRM3: 0.5).
 echo_tolerance = 0.25
-# A user raising a shed zone keeps it out of shedding this long.
+# Raising a shed floor in the Home app keeps that floor out of shedding for this many minutes.
+# Afterwards it may be shed again, measured from your new setpoint.
 override_minutes = 120
-# Power above this counts as heating; used to learn each floor's heater power.
+# A zone's power report above this many kW counts as "heating". Only heating floors are shed,
+# and only such reports teach the service the floor's heater power.
 heating_threshold_kw = 0.05
+# How strongly each new power report updates a floor's learned heater power, between 0 and 1.
+# Lower is steadier but learns more slowly; 0.2 has mostly settled after about ten reports.
 learn_rate = 0.2
 
-# Heatit Z-TRM3 via Z-Wave JS UI ("value only"): topics relative to each zone's `device`.
-# Setpoints are written to `<device>/<setpoint>/set` as a plain number.
+# Thermostat topics, relative to each zone's `device`. These are the Heatit Z-TRM3 values as
+# Z-Wave JS UI publishes them in "value only" mode (plain numbers, no JSON).
 [thermostat]
+# Heating setpoint in °C. Writes go to `<device>/<setpoint>/set` as a plain number.
 setpoint = "67/1/setpoint/1"
-power = "50/1/value/66049"   # W
-energy = "50/1/value/65537"  # kWh counter
+# Power the heater draws right now, in watts (about 0.1 W while idle).
+power = "50/1/value/66049"
+# The thermostat's own cumulative energy counter in kWh, used to log each floor's hourly use.
+energy = "50/1/value/65537"
 
-# Shed order: LOWER priority numbers shed first and are restored last.
-# `shed_allowed` is the default; HomeKit can switch it per zone at runtime.
-# Heater power is learned from the thermostat; `nominal_kw` is only used until then.
+# One [[zone]] per floor-heating thermostat. Required keys:
+#   id        Short name used in topics and the database: lower-case letters, digits, _ or -.
+#   device    The thermostat's topic in Z-Wave JS UI, zwave/<Room>/<Device>.
+#   priority  Shed order: LOWER numbers are shed first and restored last. Equal numbers are
+#             shed in id order.
+# Optional keys, with their defaults:
+#   name = <id>          Display name in /api/state and the status JSON.
+#   shed_allowed = true  Whether the guard may shed this floor. HomeKit can switch it per zone
+#                        at runtime, and that runtime choice wins over this file.
+#   shed_delta = 4.0     How many °C below your own setpoint the floor is set while shed; 4 °C
+#                        is enough to switch the heater off.
+#   min_setpoint = 5.0   Lowest setpoint ever written: a shed never goes below this.
+#   max_setpoint = 35.0  Highest setpoint ever written, even if you or an override ask for more.
+#   nominal_kw = 1.0     Assumed heater power until the floor has been seen heating and its
+#                        real power learned. Learned values survive restarts.
+#   setpoint_topic, power_topic, energy_topic
+#                        Full topics replacing `<device>/<[thermostat] suffix>`, for a device
+#                        that publishes elsewhere.
+
+# Large room with the biggest heater, so shedding it helps the most.
 [[zone]]
 id = "bad"
 name = "Bad"
 device = "zwave/Bad/Gulv_bad"
 priority = 1
 
+# Laundry-room heating cable, measured at about 575 W.
 [[zone]]
 id = "vaskerom"
 name = "Vaskerom"
@@ -110,8 +165,6 @@ name = "Gang"
 device = "zwave/Gang/Gulv_gang"
 priority = 3
 
-# Rental unit (Utleie): currently empty. If tenants move in, switch shedding off for these
-# two in HomeKit, or set shed_allowed = false here.
 [[zone]]
 id = "utleie_1"
 name = "Utleie 1"
@@ -130,8 +183,3 @@ id = "kjeller"
 name = "Kjeller"
 device = "zwave/Kjeller/Gulv_kjeller"
 priority = 6
-
-# Per-zone keys and their defaults:
-#   shed_allowed = true, shed_delta = 4.0, min_setpoint = 5.0, max_setpoint = 35.0,
-#   nominal_kw = 1.0, and setpoint_topic / power_topic / energy_topic to override the
-#   topics derived from `device` and [thermostat].
