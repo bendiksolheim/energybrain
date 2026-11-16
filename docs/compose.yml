@@ -8,7 +8,7 @@
 # HomeKit switch (energybrain/active) or energybrain/mode/set turns it active.
 services:
   energybrain:
-    # Pin a release (e.g. :1.2.3 or :1.2) instead of :latest to upgrade on your own terms.
+    # Pin a release (e.g. :3) instead of :latest to upgrade on your own terms.
     image: bendiksolheim/energybrain:latest
     restart: unless-stopped
     environment:

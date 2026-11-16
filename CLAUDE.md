@@ -152,8 +152,9 @@ keep it up to date if a decision changes.
   it. jiff's `tzdb-bundle-always` embeds the tz database so `Europe/Oslo` resolves in distroless.
 - Releases: publishing a GitHub release runs `.github/workflows/release.yml`, which reuses
   `ci.yml` (`workflow_call`) as a gate, then pushes `deploy/Dockerfile` (amd64 only) to Docker Hub
-  as `<DOCKER_USERNAME>/energybrain` with tags `X.Y.Z`, `X.Y` and `latest` (not for
-  pre-releases). Needs repo secrets `DOCKER_USERNAME` and `DOCKER_PASSWORD` (same names as the
+  as `<DOCKER_USERNAME>/energybrain`. Releases are plain integers (user decision, no semver):
+  git tag `vN` → image tags `N` and `latest`; a pre-release `vN-rc.1` → only `N-rc.1`. A first
+  job rejects any other tag name, since metadata-action would otherwise push only `latest`. Needs repo secrets `DOCKER_USERNAME` and `DOCKER_PASSWORD` (same names as the
   user's other Docker Hub projects). Running
   the published image is documented in `docs/docker.md` with `docs/compose.yml`.
 - Toolchain is **pinned** to an exact version in `rust-toolchain.toml` (now 1.100.0); CI installs

@@ -8,8 +8,9 @@ name: release
 # Same names as in the other repositories that publish to Docker Hub. Because the username is a
 # secret, the image name shows up as ***/energybrain in the logs.
 #
-# Release tags must be semver (v1.2.3). A release tagged v1.2.3 pushes 1.2.3, 1.2 and latest;
-# a pre-release (v1.3.0-rc.1) pushes only its own version and leaves latest alone.
+# Releases are numbered with plain integers: a release tagged v3 (or 3) pushes 3 and latest.
+# A pre-release gets a suffix (v4-rc.1) and pushes only 4-rc.1, leaving latest alone.
+# Any other tag name stops the workflow in the first job, before anything is built or pushed.
 on:
   release:
     types: [published]
@@ -21,8 +22,21 @@ env:
   IMAGE: docker.io/${{ secrets.DOCKER_USERNAME }}/energybrain
 
 jobs:
+  # Without this, a tag the pattern below doesn't match would push only `latest`.
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v?[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Release tag '$TAG' must be v<N> (or v<N>-<suffix> for a pre-release)"
+            exit 1
+          fi
+
   # Same gate as main: fmt, clippy, tests, coverage. A red commit never becomes an image.
   ci:
+    needs: tag
     uses: ./.github/workflows/ci.yml
 
   push:
@@ -44,8 +58,7 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=match,pattern=^v?(\d+(-[0-9A-Za-z.]+)?)$,group=1
             type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
 
       - uses: docker/build-push-action@v6

@@ -7,11 +7,15 @@ Each GitHub release publishes an image to Docker Hub as `bendiksolheim/energybra
 
 | Tag | Points at |
 |---|---|
-| `1.2.3` | Exactly that release |
-| `1.2` | The newest `1.2.x` release |
+Releases are numbered 1, 2, 3, … with no minor or patch part.
+
+| Tag | Points at |
+|---|---|
+| `3` | Exactly that release |
+| `4-rc.1` | A pre-release |
 | `latest` | The newest release that isn't a pre-release |
 
-Pin `1.2.3` or `1.2` in production so an upgrade only happens when you change the tag.
+Pin a number such as `3` in production so an upgrade only happens when you change the tag.
 
 ## First start
 
@@ -99,5 +103,6 @@ docker compose -f deploy/docker-compose.yml up -d --build
 - the **secret** `DOCKER_PASSWORD`: a Docker Hub access token with *Read & Write* scope
   (the account password works too, but a token can be revoked on its own).
 
-Tag releases as semver, e.g. `v1.2.3`. Mark a release as a pre-release (`v1.3.0-rc.1`) to
-publish it without moving `latest`.
+Tag releases `v<N>`, one higher than the last (`v1`, `v2`, …); the `v` is optional. Mark a
+release as a pre-release and give it a suffix (`v4-rc.1`) to publish it without moving
+`latest`. Any other tag name fails the workflow before anything is built.
