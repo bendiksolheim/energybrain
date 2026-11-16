@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(l.len(), 0);
         assert_eq!(l.month(), nov());
         assert_eq!(l.top_average(), Kw::ZERO);
-        assert!(l.top_days().is_empty());
+        assert_eq!(l.top_days(), Vec::<DayPeak>::new());
     }
 
     #[test]

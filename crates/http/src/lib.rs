@@ -223,7 +223,7 @@ mod tests {
             ["engine has not reported yet", "mqtt disconnected"]
         );
         let mut s = status();
-        assert!(health(Some(&s), true, now, age).is_empty());
+        assert_eq!(health(Some(&s), true, now, age), Vec::<String>::new());
         s.freshness = Freshness::Stale;
         s.at = ts("2026-11-15T17:19:00Z");
         assert_eq!(

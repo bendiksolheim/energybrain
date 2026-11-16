@@ -146,7 +146,7 @@ keep it up to date if a decision changes.
 - Graceful stop (SIGTERM/Ctrl-C): `Engine::shutdown` restores shed zones in Active mode without
   changing the persisted mode, then MQTT is flushed (disconnect + wait), and the store thread and
   HTTP server are stopped.
-- Deployment: `deploy/Dockerfile` (rust:1.97 build → distroless cc nonroot, `/data` volume,
+- Deployment: `deploy/Dockerfile` (rust:1.100 build → distroless cc nonroot, `/data` volume,
   `/config/energybrain.toml`), `deploy/docker-compose.yml` (credentials from `deploy/.env`,
   both gitignored). The image can't be built locally (no Docker on the dev Mac), so CI builds
   it. jiff's `tzdb-bundle-always` embeds the tz database so `Europe/Oslo` resolves in distroless.
@@ -156,3 +156,12 @@ keep it up to date if a decision changes.
   pre-releases). Needs repo secrets `DOCKER_USERNAME` and `DOCKER_PASSWORD` (same names as the
   user's other Docker Hub projects). Running
   the published image is documented in `docs/docker.md` with `docs/compose.yml`.
+- Toolchain is **pinned** to an exact version in `rust-toolchain.toml` (now 1.100.0); CI installs
+  it with `rustup toolchain install` and the Dockerfile uses the matching `rust:X.Y` image. A
+  floating `stable` let CI pick up Rust 1.100 (new `clippy::assert_is_empty`) while local was
+  1.97, so `just check` failed only on CI. Bump all three together, deliberately.
+  `rust-version` in `Cargo.toml` stays the MSRV (1.97). Empty-collection asserts use
+  `assert_eq!(x, Vec::<T>::new())`. After switching toolchains run a full `cargo llvm-cov clean`
+  (not `--workspace`): stale test binaries from the old rustc are otherwise merged into the
+  report and show up as hundreds of missed lines. 1.100 also maps implicit `else`/`?` branches
+  to lines more precisely, which exposed 4 real gaps (fixed).

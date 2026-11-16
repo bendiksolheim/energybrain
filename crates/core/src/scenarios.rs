@@ -382,6 +382,26 @@ fn spike(mode: Mode, from: i64, dur: i64, extra: f64) -> Sim {
     sim
 }
 
+/// The simulated thermostat, like a Z-TRM3, reports power only when a write toggles its relay.
+#[test]
+fn sim_thermostat_reports_power_only_when_its_relay_changes() {
+    let mut sim = Sim::new("2026-11-15T17:00:00Z", Mode::Active);
+    let bad = ZoneId::new("bad").unwrap();
+    let reported = |sim: &mut Sim| {
+        sim.run(mins(1));
+        let status = sim.last_status();
+        status.zones.iter().find(|z| z.id == bad).unwrap().power
+    };
+    // Load changes silently; a write that keeps the relay on reports nothing.
+    sim.floors[0].load = 1.6;
+    sim.thermostat_write(&bad, 27.0);
+    assert_eq!(reported(&mut sim), Some(Kw::new(1.5)));
+    sim.thermostat_write(&bad, 20.0);
+    assert_eq!(reported(&mut sim), Some(Kw::new(0.01)));
+    sim.thermostat_write(&bad, 27.0);
+    assert_eq!(reported(&mut sim), Some(Kw::new(1.6)));
+}
+
 #[test]
 fn s01_quiet_hour_does_nothing() {
     let mut sim = Sim::new("2026-11-15T17:00:00Z", Mode::Active);
@@ -545,7 +565,7 @@ fn s10_month_rollover_resets_the_ledger() {
     // 23:00Z is midnight on 1 December locally.
     sim.run(mins(15));
     let s = sim.last_status();
-    assert!(s.top_days.is_empty());
+    assert_eq!(s.top_days, Vec::<crate::peaks::DayPeak>::new());
     assert_eq!(s.limit.allowed, Kwh::new(5.0));
     assert_eq!(s.top_average, Kw::ZERO);
     insta::assert_snapshot!(sim.snapshot());
@@ -594,7 +614,7 @@ fn s12_restart_mid_shed_continues_and_restores_later() {
         .filter(|z| z.shed)
         .map(|z| z.id.clone())
         .collect();
-    assert!(!shed_before.is_empty());
+    assert_ne!(shed_before, Vec::<ZoneId>::new());
     let writes_before = sim.writes();
     sim.restart();
     sim.run(mins(1));

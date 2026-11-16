@@ -626,20 +626,23 @@ mod tests {
                 heating_kw: Kw::new(1.5),
             }]
         );
-        assert!(
+        assert_eq!(
             e.handle(Input::ZonePower {
                 zone: id("bad"),
                 at: t,
                 power: Kw::new(0.01),
-            })
-            .is_empty()
+            }),
+            Vec::<Output>::new()
         );
         let energy = |at: &str, total: f64| Input::ZoneEnergy {
             zone: id("bad"),
             at: ts(at),
             total: Kwh::new(total),
         };
-        assert!(e.handle(energy("2026-11-15T17:00:30Z", 100.0)).is_empty());
+        assert_eq!(
+            e.handle(energy("2026-11-15T17:00:30Z", 100.0)),
+            Vec::<Output>::new()
+        );
         assert_eq!(
             e.handle(energy("2026-11-15T18:00:30Z", 101.5)),
             vec![Output::PersistZoneHour {
@@ -686,19 +689,19 @@ mod tests {
                 allowed: true,
             },
         ] {
-            assert!(e.handle(input).is_empty());
+            assert_eq!(e.handle(input), Vec::<Output>::new());
         }
     }
 
     #[test]
     fn setting_the_same_mode_does_nothing() {
         let mut e = engine(PersistedState::default());
-        assert!(
+        assert_eq!(
             e.handle(Input::SetMode {
                 at: ts(T0),
                 mode: Mode::Observe,
-            })
-            .is_empty()
+            }),
+            Vec::<Output>::new()
         );
     }
 
@@ -793,7 +796,7 @@ mod tests {
         assert_eq!(active.guard.shed[0].zone, id("bad"));
         assert_eq!(active.guard.shed[0].since, ts(T0));
         let mut observe = engine(state(Mode::Observe));
-        assert!(observe.guard.shed.is_empty());
+        assert_eq!(observe.guard.shed, Vec::<Shed>::new());
         assert!(
             observe.shutdown(ts(T0)).is_empty(),
             "nothing was written in observe"
@@ -812,6 +815,6 @@ mod tests {
         }));
         assert!(!out.iter().any(|o| matches!(o, Output::PersistMode(_))));
         assert_eq!(active.mode(), Mode::Active);
-        assert!(active.guard.shed.is_empty());
+        assert_eq!(active.guard.shed, Vec::<Shed>::new());
     }
 }

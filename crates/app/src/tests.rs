@@ -305,7 +305,10 @@ async fn a_failing_load_stops_startup() {
     .await;
     let err = run(rt, std::future::pending()).await.unwrap_err();
     assert_eq!(err.to_string(), "corrupt store: disk on fire");
-    assert!(no_events()(None, 1).unwrap().is_empty());
+    assert_eq!(
+        no_events()(None, 1).unwrap(),
+        Vec::<serde_json::Value>::new()
+    );
 }
 
 #[tokio::test]

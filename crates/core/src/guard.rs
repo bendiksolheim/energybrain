@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn quiet_hour_does_nothing() {
         let mut r = Rig::new(&[("bad", 1, 1.5)]);
-        assert!(r.step(at(10, 0), 3.0).is_empty());
+        assert_eq!(r.step(at(10, 0), 3.0), Vec::<GuardEvent>::new());
         assert_eq!(r.state.status, GuardStatus::Idle);
     }
 
@@ -474,7 +474,7 @@ mod tests {
         let ev = r.step(at(30, 0), 5.5);
         assert_eq!(r.shed_ids(), ["bad", "gang"]);
         assert_eq!(ev.len(), 2);
-        assert!(released(&ev).is_empty());
+        assert_eq!(released(&ev), Vec::<(&str, ReleaseReason)>::new());
         assert!(
             matches!(&ev[0], GuardEvent::Shed { zone, load, .. } if zone.as_str() == "bad" && *load == Kw::new(1.0))
         );
@@ -509,11 +509,11 @@ mod tests {
         assert_eq!(r.shed_ids(), ["bad"]);
         // The real meter still shows the old projection, but bad's reduction is credited
         // (still drawing, and within the settle window).
-        assert!(r.step(at(30, 10), 5.0).is_empty());
+        assert_eq!(r.step(at(30, 10), 5.0), Vec::<GuardEvent>::new());
         assert_eq!(r.shed_ids(), ["bad"]);
         // Active mode: bad stops drawing; after `settle` the meter is trusted again.
         r.stop_drawing("bad");
-        assert!(r.step(at(31, 0), 4.6).is_empty());
+        assert_eq!(r.step(at(31, 0), 4.6), Vec::<GuardEvent>::new());
         assert_eq!(r.shed_ids(), ["bad"]);
     }
 
@@ -564,7 +564,7 @@ mod tests {
         assert_eq!(r.state.status, GuardStatus::LimitUnreachable);
         // Still over (e.g. EV charging), nothing left to shed: no repeated report.
         let ev = r.step(at(30, 10), 9.0 + 0.75);
-        assert!(ev.is_empty());
+        assert_eq!(ev, Vec::<GuardEvent>::new());
         assert_eq!(r.state.status, GuardStatus::LimitUnreachable);
     }
 
@@ -576,9 +576,9 @@ mod tests {
         r.stop_drawing("bad");
         r.stop_drawing("gang");
         // Well below the limit, but not shed long enough yet.
-        assert!(r.step(at(12, 0), 2.0).is_empty());
+        assert_eq!(r.step(at(12, 0), 2.0), Vec::<GuardEvent>::new());
         // Long enough, but bringing gang back would exceed limit − margin.
-        assert!(r.step(at(16, 0), 4.0).is_empty());
+        assert_eq!(r.step(at(16, 0), 4.0), Vec::<GuardEvent>::new());
         assert_eq!(r.state.status, GuardStatus::Shedding);
         // Comfortable: release the most recently shed zone first.
         assert_eq!(
@@ -586,13 +586,13 @@ mod tests {
             [("gang", ReleaseReason::BelowLimit)]
         );
         // The next release waits for the stagger.
-        assert!(r.step(at(17, 0), 2.0).is_empty());
+        assert_eq!(r.step(at(17, 0), 2.0), Vec::<GuardEvent>::new());
         assert_eq!(
             released(&r.step(at(18, 0), 2.0)),
             [("bad", ReleaseReason::BelowLimit)]
         );
         assert_eq!(r.state.status, GuardStatus::Idle);
-        assert!(r.step(at(20, 0), 2.0).is_empty());
+        assert_eq!(r.step(at(20, 0), 2.0), Vec::<GuardEvent>::new());
     }
 
     #[test]
@@ -602,7 +602,7 @@ mod tests {
         r.stop_drawing("bad");
         // New hour, load still high: the zone simply stays shed.
         let next = at(60, 10);
-        assert!(r.step(next, 4.6).is_empty());
+        assert_eq!(r.step(next, 4.6), Vec::<GuardEvent>::new());
         assert_eq!(r.shed_ids(), ["bad"]);
     }
 
@@ -616,7 +616,10 @@ mod tests {
         let ev = r.step_with(at(31, 0), &stale, true);
         assert_eq!(released(&ev), [("gang", ReleaseReason::MeterStale)]);
         assert_eq!(r.state.status, GuardStatus::MeterStale);
-        assert!(r.step_with(at(32, 0), &stale, true).is_empty());
+        assert_eq!(
+            r.step_with(at(32, 0), &stale, true),
+            Vec::<GuardEvent>::new()
+        );
         stale.freshness = Freshness::NoData;
         assert_eq!(
             released(&r.step_with(at(33, 0), &stale, true)),
@@ -645,7 +648,7 @@ mod tests {
                 ("gang", ReleaseReason::NotSheddable)
             ]
         );
-        assert!(r.state.shed.is_empty());
+        assert_eq!(r.state.shed, Vec::<Shed>::new());
     }
 
     #[test]

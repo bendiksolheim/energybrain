@@ -431,7 +431,7 @@ M1–M6 need none of this, so they can be done in parallel with waiting for answ
 
 **M1 — Skeleton & tooling.** Workspace, crates with empty `lib.rs`, shared
 `[workspace.lints]` (`unsafe_code = "forbid"`, clippy pedantic as warn with a short
-allow-list), `justfile`, `rust-toolchain.toml` (stable), CI workflow
+allow-list), `justfile`, `rust-toolchain.toml` (pinned, see decision log), CI workflow
 (fmt, clippy, test, coverage gate), and the `.gitignore`. Initialise git.
 
 **M2 — Core foundations.** Units, `Clock`/`SimClock`, `LocalCalendar` with DST tests,

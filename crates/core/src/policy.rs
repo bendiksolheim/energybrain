@@ -273,6 +273,6 @@ mod tests {
                 .contains("kept until 2026-11-15T19:00:00Z")
         );
         ctx.now = ts("2026-11-15T19:00:00Z");
-        assert!(ManualOverride.propose(&ctx).is_empty());
+        assert_eq!(ManualOverride.propose(&ctx), Vec::<Proposal>::new());
     }
 }

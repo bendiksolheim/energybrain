@@ -585,9 +585,9 @@ pub(crate) mod tests {
             }]
         );
         assert_eq!(t.encode(&write(bad(), 18.0))[0].payload, "18");
-        assert!(
-            t.encode(&write(ZoneId::new("ghost").unwrap(), 18.0))
-                .is_empty()
+        assert_eq!(
+            t.encode(&write(ZoneId::new("ghost").unwrap(), 18.0)),
+            Vec::<Publish>::new()
         );
     }
 
@@ -622,7 +622,7 @@ pub(crate) mod tests {
             GuardStatus::Shedding,
             true,
         ))));
-        assert!(again.is_empty());
+        assert_eq!(again, Vec::<Publish>::new());
         // Changes only.
         let changed = t.encode(&Output::PublishStatus(Box::new(status(
             Mode::Observe,

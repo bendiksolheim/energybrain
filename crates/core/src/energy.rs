@@ -433,7 +433,10 @@ mod tests {
         let mut m = Meter::new(MeterConfig::default());
         let h0 = ts("2026-11-15T17:00:00Z");
         let h1 = ts("2026-11-15T18:00:00Z");
-        assert!(m.record_cumulative(h0, Kwh::new(1000.0)).is_empty());
+        assert_eq!(
+            m.record_cumulative(h0, Kwh::new(1000.0)),
+            Vec::<HourEnergy>::new()
+        );
         m.advance(h0);
         feed(&mut m, h0, SignedDuration::from_hours(1), 4.0);
 
@@ -501,9 +504,9 @@ mod tests {
     fn unaligned_first_reading_settles_nothing_until_two_boundaries_are_known() {
         let mut m = Meter::new(MeterConfig::default());
         m.record_cumulative(ts("2026-11-15T17:30:00Z"), Kwh::new(1000.0));
-        assert!(
-            m.record_cumulative(ts("2026-11-15T18:30:00Z"), Kwh::new(1002.0))
-                .is_empty()
+        assert_eq!(
+            m.record_cumulative(ts("2026-11-15T18:30:00Z"), Kwh::new(1002.0)),
+            Vec::<HourEnergy>::new()
         );
         let settled = m.record_cumulative(ts("2026-11-15T19:00:00Z"), Kwh::new(1003.0));
         assert_eq!(settled.len(), 1);
@@ -517,14 +520,20 @@ mod tests {
         let mut m = Meter::new(MeterConfig::default());
         let h0 = ts("2026-11-15T17:00:00Z");
         m.record_cumulative(h0, Kwh::new(1000.0));
-        assert!(m.record_cumulative(h0, Kwh::new(1001.0)).is_empty());
-        assert!(
-            m.record_cumulative(h0 - secs(1), Kwh::new(1001.0))
-                .is_empty()
+        assert_eq!(
+            m.record_cumulative(h0, Kwh::new(1001.0)),
+            Vec::<HourEnergy>::new()
+        );
+        assert_eq!(
+            m.record_cumulative(h0 - secs(1), Kwh::new(1001.0)),
+            Vec::<HourEnergy>::new()
         );
         // Meter replaced: register restarts low, history restarts.
         let h1 = ts("2026-11-15T18:00:00Z");
-        assert!(m.record_cumulative(h1, Kwh::new(5.0)).is_empty());
+        assert_eq!(
+            m.record_cumulative(h1, Kwh::new(5.0)),
+            Vec::<HourEnergy>::new()
+        );
         let settled = m.record_cumulative(ts("2026-11-15T19:00:00Z"), Kwh::new(8.0));
         assert_eq!(settled.len(), 1);
         assert!(close(settled[0].kwh, 3.0));

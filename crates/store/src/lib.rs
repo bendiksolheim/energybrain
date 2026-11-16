@@ -16,6 +16,7 @@ use energybrain_core::time::HourStart;
 use energybrain_core::units::{Celsius, Kw, Kwh};
 use energybrain_core::zone::Override;
 use jiff::Timestamp;
+use rusqlite::types::FromSql;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 /// Why the store failed.
@@ -104,10 +105,7 @@ impl SqliteStore {
     fn init(mut conn: Connection) -> Result<Self, StoreError> {
         conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")?;
-        let found: i64 = conn
-            .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
-            .optional()?
-            .unwrap_or(0);
+        let found: i64 = first_value(&conn, "SELECT version FROM schema_version")?.unwrap_or(0);
         let known = i64::try_from(MIGRATIONS.len()).unwrap_or(i64::MAX);
         if found > known {
             return Err(StoreError::Schema { found, known });
@@ -191,12 +189,8 @@ impl Store for SqliteStore {
             state.hours.insert(e.hour, e);
         }
 
-        let mode: Option<String> = self
-            .conn
-            .query_row("SELECT value FROM settings WHERE key = 'mode'", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
+        let mode: Option<String> =
+            first_value(&self.conn, "SELECT value FROM settings WHERE key = 'mode'")?;
         state.mode = mode
             .map(|m| Mode::parse(&m).ok_or_else(|| StoreError::Corrupt(format!("mode {m:?}"))))
             .transpose()?;
@@ -391,6 +385,12 @@ fn timestamp(s: i64) -> Result<Timestamp, StoreError> {
 
 fn hour_start(s: i64) -> Result<HourStart, StoreError> {
     Ok(HourStart::containing(timestamp(s)?))
+}
+
+/// The first column of the first row, if there is a row. A named function so the caller's `?`
+/// shares a line with covered code (see the coverage note in CLAUDE.md).
+fn first_value<T: FromSql>(conn: &Connection, sql: &str) -> rusqlite::Result<Option<T>> {
+    conn.query_row(sql, [], |r| r.get(0)).optional()
 }
 
 fn zone_id(s: &str) -> Result<ZoneId, StoreError> {
@@ -706,6 +706,13 @@ mod tests {
             err.to_string(),
             "database schema version 99 is newer than this build knows (1)"
         );
+    }
+
+    #[test]
+    fn every_quality_round_trips() {
+        for q in [Quality::Estimated, Quality::Interpolated, Quality::Measured] {
+            assert_eq!(parse_quality(quality_str(q)).unwrap(), q);
+        }
     }
 
     #[test]
