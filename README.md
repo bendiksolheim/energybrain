@@ -35,23 +35,23 @@ switch it to active.
 
 ## Running it
 
-The service runs as one container on the home server (amd64).
+The service runs as one container on the home server (amd64). Every GitHub release is
+published to Docker Hub as `bendiksolheim/energybrain`, and [`docs/compose.yml`](docs/compose.yml)
+runs it. [`docs/docker.md`](docs/docker.md) covers setup, upgrades, backups and how releases
+are published.
 
 ```sh
-cp config/example.toml deploy/energybrain.toml      # gitignored; edit if needed
-cat > deploy/.env <<'EOF'                            # gitignored
-ENERGYBRAIN_MQTT_USERNAME=...
-ENERGYBRAIN_MQTT_PASSWORD=...
-EOF
-docker compose -f deploy/docker-compose.yml up -d --build
-docker compose -f deploy/docker-compose.yml logs -f
+# in a directory holding compose.yml, energybrain.toml and .env (see docs/docker.md)
+docker compose up -d
+docker compose logs -f
 ```
 
 - **Storage.** The SQLite database lives in the `energybrain-data` volume (`/data`).
 - **Stopping.** `docker compose stop` sends SIGTERM, which restores any lowered floors
   before exiting.
-- **Without Docker.** Run `cargo run --release -p energybrain -- path/to/config.toml`, or set
-  `ENERGYBRAIN_CONFIG`.
+- **From source.** `docker compose -f deploy/docker-compose.yml up -d --build` builds the image
+  from a checkout. Without Docker, run `cargo run --release -p energybrain -- path/to/config.toml`,
+  or set `ENERGYBRAIN_CONFIG`.
 - **Logs.** Set `ENERGYBRAIN_LOG_FORMAT=json` for JSON logs (the image's default) and
   `RUST_LOG=debug` for more detail.
 

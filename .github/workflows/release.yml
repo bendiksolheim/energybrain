@@ -1,0 +1,61 @@
+name: release
+
+# Publishing a GitHub release builds the image and pushes it to Docker Hub.
+#
+# Repository settings needed (Settings → Secrets and variables → Actions):
+#   secret DOCKER_USERNAME  Docker Hub account that owns the repository (also the image namespace)
+#   secret DOCKER_PASSWORD  Docker Hub access token with Read & Write scope (or the password)
+# Same names as in the other repositories that publish to Docker Hub. Because the username is a
+# secret, the image name shows up as ***/energybrain in the logs.
+#
+# Release tags must be semver (v1.2.3). A release tagged v1.2.3 pushes 1.2.3, 1.2 and latest;
+# a pre-release (v1.3.0-rc.1) pushes only its own version and leaves latest alone.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: docker.io/${{ secrets.DOCKER_USERNAME }}/energybrain
+
+jobs:
+  # Same gate as main: fmt, clippy, tests, coverage. A red commit never becomes an image.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  push:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          # The home server is amd64; arm64 under QEMU would multiply the Rust build time.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

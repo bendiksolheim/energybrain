@@ -150,3 +150,9 @@ keep it up to date if a decision changes.
   `/config/energybrain.toml`), `deploy/docker-compose.yml` (credentials from `deploy/.env`,
   both gitignored). The image can't be built locally (no Docker on the dev Mac), so CI builds
   it. jiff's `tzdb-bundle-always` embeds the tz database so `Europe/Oslo` resolves in distroless.
+- Releases: publishing a GitHub release runs `.github/workflows/release.yml`, which reuses
+  `ci.yml` (`workflow_call`) as a gate, then pushes `deploy/Dockerfile` (amd64 only) to Docker Hub
+  as `<DOCKER_USERNAME>/energybrain` with tags `X.Y.Z`, `X.Y` and `latest` (not for
+  pre-releases). Needs repo secrets `DOCKER_USERNAME` and `DOCKER_PASSWORD` (same names as the
+  user's other Docker Hub projects). Running
+  the published image is documented in `docs/docker.md` with `docs/compose.yml`.

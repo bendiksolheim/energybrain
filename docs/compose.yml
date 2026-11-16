@@ -1,0 +1,31 @@
+# energybrain from the published Docker Hub image. See docs/docker.md.
+#
+# Next to this file you need:
+#   energybrain.toml  your configuration (start from config/example.toml)
+#   .env              ENERGYBRAIN_MQTT_USERNAME=… and ENERGYBRAIN_MQTT_PASSWORD=…
+#
+# It starts in observe mode: it computes and reports, but writes no setpoints until the
+# HomeKit switch (energybrain/active) or energybrain/mode/set turns it active.
+services:
+  energybrain:
+    # Pin a release (e.g. :1.2.3 or :1.2) instead of :latest to upgrade on your own terms.
+    image: bendiksolheim/energybrain:latest
+    restart: unless-stopped
+    environment:
+      ENERGYBRAIN_MQTT_USERNAME: ${ENERGYBRAIN_MQTT_USERNAME:?set in .env}
+      ENERGYBRAIN_MQTT_PASSWORD: ${ENERGYBRAIN_MQTT_PASSWORD:?set in .env}
+      RUST_LOG: info
+      # The image logs JSON; use "text" for human-readable lines.
+      # ENERGYBRAIN_LOG_FORMAT: text
+    volumes:
+      - ./energybrain.toml:/config/energybrain.toml:ro
+      # SQLite database: hourly energy, learned zone state, mode and the event log.
+      - energybrain-data:/data
+    ports:
+      # /healthz, /api/state, /api/events, /metrics. Must match [http] listen in the config.
+      - "8080:8080"
+    # SIGTERM restores any lowered floors before exiting; give it time.
+    stop_grace_period: 15s
+
+volumes:
+  energybrain-data:
