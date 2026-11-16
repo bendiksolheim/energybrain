@@ -1,8 +1,8 @@
 # energybrain
 
 Keeps a Norwegian home inside its grid-rent capacity tier (*kapasitetsledd*) by briefly
-lowering floor-heating setpoints when an hour is heading over the limit, and restoring them
-afterwards. It talks MQTT to a Tibber Pulse (HAN port), Heatit Z-TRM3 thermostats via
+adjusting energy-hungry entities when an hour is heading over the limit, and restoring them
+afterwards. Right now it talks MQTT to a Tibber Pulse (HAN port), Heatit Z-TRM3 thermostats via
 Z-Wave JS UI, and HomeKit via Homebridge's Easy MQTT plugin.
 
 It ships in **observe mode**: it computes and reports everything but writes nothing until you
@@ -17,19 +17,19 @@ switch it to active.
   today already had a higher hour, up to that level is free. The guard acts on that value
   minus a 0.3 kWh safety margin.
 - **The projection.** Energy used so far this hour plus a 60-second average of the current
-  power for the rest of the hour. A kettle doesn't trigger anything.
+  power for the rest of the hour.
 - **Shedding.** When the projection exceeds the limit, floors that are actually heating are
   lowered by 4 °C, in priority order (**lower number first**), until the expected saving
   covers the excess. A floor is restored, one every 2 minutes and most recent first, once it
   has been down at least 5 minutes and the projection with it back on stays 0.3 kWh under
   the limit.
-- **You win.** If you raise a lowered floor in the Home app, it's left alone for 2 hours.
+- **You win.** If you raise a lowered floor manually, it's left alone for 2 hours.
   Any other change you make becomes that floor's new normal setpoint.
 - **Safety.**
   - A stale meter (no power reading for 2 minutes) restores everything.
   - Leaving active mode, or stopping the service, restores every lowered floor first.
   - After a restart, a floor that was lowered is picked up again rather than flapped.
-- **Unreachable hours.** If even lowering every floor can't save the hour (for example the
+- **Unreachable hours.** If even lowering every floor can't save the hour (for example an
   EV charger at 11 kW), all floors are lowered and a `limit_unreachable` event is logged.
   Observe mode will show you how often that happens.
 
@@ -57,9 +57,7 @@ docker compose -f deploy/docker-compose.yml logs -f
 
 ## Configuration
 
-[`config/example.toml`](config/example.toml) is the full reference: every key is commented,
-and it describes this house. Unknown keys are rejected, and every error names the key at
-fault. The keys you are most likely to touch:
+[`config/example.toml`](config/example.toml) is the full reference: every key is commented. Unknown keys are rejected, and every error names the key at fault. The keys you are most likely to touch:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -128,8 +126,7 @@ docs don't include a complete `config.json` example.
 
 - **The contact sensor** reads "closed" normally and "open" while floors are lowered, so you
   can attach a HomeKit notification to it.
-- **Per-zone switches.** Add one `shed_allowed` switch per zone. The rental zones
-  (`utleie_1`, `utleie_2`) are where switching shedding off matters most, if tenants move in.
+- **Per-zone switches.** Add one `shed_allowed` switch per zone.
 - **Broker settings.** Each accessory's `mqtt` block needs your broker settings, as for your
   other Easy MQTT accessories.
 
@@ -166,9 +163,8 @@ What to look for:
   Compare them with evenings you remember: was the house really heading over 5 kWh?
 - **The `release` events that follow.** They should come minutes later, not seconds.
   Back-and-forth would point to the margins being too tight.
-- **`limit_unreachable` events.** Frequent ones mean 2–5 kW isn't realistic without moving
-  EV charging. Set the Easee to charge at night with a lower current, or raise `target_kw`
-  to 10.
+- **`limit_unreachable` events.** Frequent ones mean 2–5 kW isn't realistic. Raise `target_kw`
+  to the next level.
 - **`top_days` in `/api/state`.** This is where the month's bill stands right now.
 
 ## Go-live checklist
