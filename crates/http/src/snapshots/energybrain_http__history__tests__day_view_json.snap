@@ -1,6 +1,6 @@
 ---
 source: crates/http/src/history.rs
-assertion_line: 667
+assertion_line: 679
 expression: json(&view)
 ---
 {
@@ -248,6 +248,16 @@ expression: json(&view)
         6.0,
         null,
         6.0
+      ]
+    },
+    "floors": {
+      "unit": "kW",
+      "values": [
+        1.4,
+        1.4,
+        1.4,
+        null,
+        1.4
       ]
     },
     "used": {

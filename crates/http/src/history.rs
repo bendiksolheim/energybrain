@@ -163,6 +163,8 @@ pub struct SampleColumns {
     pub guard: Vec<Option<GuardStatus>>,
     /// Moving-average power.
     pub power: Series,
+    /// The configured zones' reported power added up (`null` when none has reported).
+    pub floors: Series,
     /// Energy used so far in the hour.
     pub used: Series,
     /// Projection for the hour.
@@ -399,12 +401,22 @@ fn sample_columns(site: &Site, samples: &[Sample]) -> SampleColumns {
         mode: rows.iter().map(|(_, s)| s.map(|s| s.mode)).collect(),
         guard: rows.iter().map(|(_, s)| s.map(|s| s.guard)).collect(),
         power: col(Kw::UNIT, &|s| s.power.map(Kw::value)),
+        floors: col(Kw::UNIT, &|s| floors(site, s)),
         used: col(Kwh::UNIT, &|s| Some(s.used.value())),
         projected: col(Kwh::UNIT, &|s| s.projected.map(Kwh::value)),
         allowed: col(Kwh::UNIT, &|s| Some(s.allowed.value())),
         limit: col(Kwh::UNIT, &|s| Some(s.limit.value())),
         zones,
     }
+}
+
+/// The configured zones' power in `s` added up, if any of them has reported.
+fn floors(site: &Site, s: &Sample) -> Option<f64> {
+    s.zones
+        .iter()
+        .filter(|z| site.zones.iter().any(|(id, _)| *id == z.id))
+        .filter_map(|z| z.power.map(Kw::value))
+        .reduce(|a, b| a + b)
 }
 
 /// Builds the view of the month containing `day`, whose [`month_range`] is `(from, to)`.
@@ -717,6 +729,22 @@ pub(crate) mod tests {
         };
         assert_eq!(n, 31);
         insta::assert_snapshot!(json(&compact));
+    }
+
+    #[test]
+    fn floors_add_up_the_configured_zones_that_reported() {
+        let mut s = sample("2026-11-15T17:00:00Z", 1.0, false);
+        let mut kjeller = s.zones[0].clone();
+        kjeller.id = id("kjeller");
+        kjeller.power = Some(Kw::new(0.5));
+        s.zones.push(kjeller);
+        assert_eq!(
+            floors(&site(), &s),
+            Some(1.9),
+            "bad 1.4 + kjeller 0.5, not the unknown zone"
+        );
+        s.zones.iter_mut().for_each(|z| z.power = None);
+        assert_eq!(floors(&site(), &s), None);
     }
 
     #[test]

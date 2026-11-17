@@ -59,6 +59,10 @@ curl -s http://localhost:8080/healthz              # 200, or 503 with the reason
 curl -s http://localhost:8080/api/state | jq .     # mode, this hour, limit, zones
 ```
 
+The history page is at `http://<host>:8080/`. Its minute graphs fill in from the first start
+on; `store.sample_retention_days` (default 90) sets how long they are kept, at about 0.5 MB a
+day in `/data`.
+
 `/healthz` returns 503 until the first meter reading arrives and whenever MQTT is
 disconnected. If it stays 503, check the broker address and credentials, and that the Tibber
 Pulse publishes to `[meter] topic`.

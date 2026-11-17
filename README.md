@@ -132,8 +132,17 @@ docs don't include a complete `config.json` example.
 
 ## HTTP
 
+Open `http://server:8080/` in a browser for the **history page**: graphs of a day (energy per
+hour against the limit, power, the hour budget, each floor's setpoints and sheds, and the
+events) and of a month (the highest hour per day, the top 3, the tier, and a day × hour
+heatmap). Minute-level detail is kept for `store.sample_retention_days` (default 90); older
+days still show their hourly energy and events.
+
 | Endpoint | What |
 |---|---|
+| `GET /` | The history page |
+| `GET /api/day?date=<YYYY-MM-DD>` | One local day for the page: hours, 1-minute samples (columnar), events. Default today |
+| `GET /api/month?month=<YYYY-MM>` | One local month: day peaks, top 3, tier, day × hour energy. Default this month |
 | `GET /healthz` | 200, or 503 with reasons (engine stalled, meter stale, MQTT down) |
 | `GET /api/state` | Mode, hour used and projected, limit and its basis, top-3 days, tier, and per zone the base, decision and reasons |
 | `GET /api/events?since=<RFC 3339>&limit=<n>` | Event log, newest first (max 1000) |
@@ -147,7 +156,10 @@ bare number, use e.g. `jq '.used.value'`.
 ## Reviewing observe mode
 
 Leave the service running in observe mode for at least two weeks, including some cold
-evenings. Then review what it would have done:
+evenings. Then review what it would have done. The history page (`http://server:8080/`) is
+the quickest way: the month view shows which days come close to the target, and a day's
+*Hour budget* and *Zones* charts show each would-shed against the projection and the limit
+(shaded where the guard was shedding). The same data from the command line:
 
 ```sh
 # What would it have done this week?

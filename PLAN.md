@@ -731,6 +731,8 @@ sheds) is lost. Grafana would have got it from VictoriaMetrics scraping `/metric
 - Sampling lives in the store (it handles `PublishStatus` in `apply`), not in core: a
   snapshot for graphs is not a decision, and core stays unchanged apart from the plain
   `Sample` data type (`Sample::of(&Status)`).
+- The floors' total power per sample (`floors`) is also added up in Rust, so the page has
+  nothing to sum.
 - **Columnar JSON** for samples (`{"unit": "kW", "values": [...]}` per series, plus one
   `at` array of RFC 3339 timestamps), which is what uPlot wants and ~5× smaller than one
   object per sample with a `{value, unit}` per number.

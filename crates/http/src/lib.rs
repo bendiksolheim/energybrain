@@ -1,5 +1,5 @@
-//! HTTP: `/healthz`, `/metrics`, `/api/state`, `/api/events`, and the history views
-//! `/api/day` and `/api/month`.
+//! HTTP: the history page at `/`, `/healthz`, `/metrics`, `/api/state`, `/api/events`, and the
+//! history views `/api/day` and `/api/month` behind the page.
 //!
 //! The router only reads shared state that the runtime loop keeps up to date: the latest
 //! [`Status`] (a `watch` channel), whether MQTT is connected, the [`Metrics`] counters, and
@@ -7,6 +7,7 @@
 
 mod history;
 mod metrics;
+mod page;
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -61,6 +62,8 @@ pub struct AppState {
 /// The HTTP routes.
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/", get(page::index))
+        .route("/assets/{name}", get(page::asset))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics))
         .route("/api/state", get(api_state))
@@ -537,5 +540,38 @@ mod tests {
             assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
             assert!(text.contains("panicked"), "{text}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_page_and_its_assets_are_served() {
+        let r = rig(no_events());
+        let res = router(r.state.clone())
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
+        let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("<title>energybrain history</title>"));
+        for (uri, content_type) in [
+            ("/assets/app.js", "text/javascript; charset=utf-8"),
+            ("/assets/uplot.min.css", "text/css; charset=utf-8"),
+            ("/assets/uplot-LICENSE", "text/plain; charset=utf-8"),
+        ] {
+            let res = router(r.state.clone())
+                .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "{uri}");
+            assert_eq!(res.headers()[CONTENT_TYPE], content_type, "{uri}");
+            assert_eq!(res.headers()[axum::http::header::CACHE_CONTROL], "no-cache");
+        }
+        assert_eq!(
+            get(&r.state, "/assets/secret.toml").await,
+            (
+                StatusCode::NOT_FOUND,
+                r#"{"error":"no asset \"secret.toml\""}"#.to_owned()
+            )
+        );
     }
 }

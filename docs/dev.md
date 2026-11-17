@@ -44,6 +44,10 @@ minute the house adds a line of its own:
 INFO energybrain_sim::driver: Tue 17:42 6.31 kW = floors 2.90 + background 1.47 + heat pump 1.00 + appliances 0.00 + ev 0.00 + extra 0.00; heating: bad, gang, kjeller
 ```
 
+Open <http://127.0.0.1:8080/> for the history page. It follows the simulated clock: "today"
+is the simulated day, and at 6× a minute sample arrives every 10 real seconds, so the minute
+graphs fill in while you watch (the page refreshes every real minute).
+
 The HTTP endpoints are on `127.0.0.1:8080`. All their timestamps are simulated time (UTC):
 
 ```sh

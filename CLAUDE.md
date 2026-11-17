@@ -205,3 +205,16 @@ keep it up to date if a decision changes.
   bounded request queue while connected, so a full queue would block the loop and Ctrl-C) and
   republishes every thermostat's retained values on each connect. Dev broker: anonymous mosquitto
   without persistence, recreated by every `just dev`.
+- History page (PLAN.md §8, replaces Grafana): `GET /` serves a static page + vendored
+  **uPlot 1.6.32** (MIT, `crates/http/assets/`, checksum-verified against jsdelivr and unpkg),
+  embedded with `include_str!`. Not a Rust dependency; JS is outside the coverage gate, so it
+  only draws: day/month bounds, hour limits, gaps, floors total, peaks, tier and the heatmap
+  are computed in `energybrain-http::history` and snapshot-tested. To bump uPlot, replace the
+  three files and the version check in `page.rs`.
+- Store migration 2: `samples`/`zone_samples`, the first `PublishStatus` per minute (app clock
+  time), pruned hourly after `store.sample_retention_days` (default 90). Sampling lives in
+  `SqliteStore::apply`, not core. Hours, zone hours and events are still kept forever.
+- `/api/day` and `/api/month` are columnar (`{"unit", "values": [...]}` per series) with
+  RFC 3339 timestamps. They read through `HistoryQuery` (one SQLite connection per request,
+  like `/api/events`). `blocking()` is generic per handler, so each handler's panic path
+  needs its own test.
