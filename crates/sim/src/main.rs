@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     store.apply(&seed)?;
 
-    let (house, startup) = House::new(&sim);
+    let (house, _) = House::new(&sim);
     let mut house_mqtt = config.mqtt.clone();
     house_mqtt.client_id = format!("{}-sim", config.mqtt.client_id);
     let (link, publisher) =
@@ -57,7 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max(Duration::from_millis(10));
     let house_task = tokio::spawn(driver::run(
         house,
-        startup,
         link,
         publisher,
         clock.clone() as Arc<dyn Clock>,

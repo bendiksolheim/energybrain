@@ -13,12 +13,16 @@ use tracing::{info, warn};
 use crate::Publish;
 use crate::house::{House, STATE_TOPIC};
 
-/// Runs `house` until `shutdown` completes. `startup` is published on the first connect;
-/// every `every` (real time) the house is stepped to `clock.now()`. Each `sim/state`
-/// publish also logs [`House::summary`], so the house shows up next to energybrain's log.
+/// Runs `house` until `shutdown` completes. Every `every` (real time) the house is stepped
+/// to `clock.now()`; on every connect the thermostats' current values are published
+/// (retained). Each `sim/state` also logs [`House::summary`], so the house shows up next
+/// to energybrain's log.
+///
+/// While disconnected, the house keeps running but what it publishes is dropped: rumqttc
+/// only drains its request queue while connected, and a full queue would block this loop
+/// (and Ctrl-C) until the broker came back.
 pub async fn run(
     mut house: House,
-    startup: Vec<Publish>,
     link: Link,
     publisher: Publisher,
     clock: Arc<dyn Clock>,
@@ -29,7 +33,7 @@ pub async fn run(
     let (tx, mut events) = mpsc::unbounded_channel();
     let mut link = link;
     let link_task = tokio::spawn(async move { while tx.send(link.next().await).is_ok() {} });
-    let mut startup = Some(startup);
+    let mut connected = false;
     let mut ticker = tokio::time::interval(every);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     tokio::pin!(shutdown);
@@ -37,32 +41,36 @@ pub async fn run(
         let out = tokio::select! {
             () = &mut shutdown => break,
             _ = ticker.tick() => house.step(clock.now()),
-            Some(event) = events.recv() => on_event(event, &mut house, &mut startup, clock.as_ref()),
+            Some(event) = events.recv() => on_event(event, &mut house, &mut connected, clock.as_ref()),
         };
         for p in out {
             if p.topic == STATE_TOPIC {
                 info!("{}", house.summary());
             }
-            // Publishing only fails once the event loop is gone, i.e. while shutting down.
-            let _ = publisher.publish_bytes(&p.topic, p.payload, p.retain).await;
+            if connected {
+                // Publishing only fails once the event loop is gone, i.e. while shutting down.
+                let _ = publisher.publish_bytes(&p.topic, p.payload, p.retain).await;
+            }
         }
     }
-    let _ = publisher.disconnect().await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), publisher.disconnect()).await;
     link_task.abort();
 }
 
 fn on_event(
     event: TransportEvent,
     house: &mut House,
-    startup: &mut Option<Vec<Publish>>,
+    connected: &mut bool,
     clock: &dyn Clock,
 ) -> Vec<Publish> {
     match event {
         TransportEvent::Connected => {
             info!("simulated house connected");
-            startup.take().unwrap_or_default()
+            *connected = true;
+            house.retained()
         }
         TransportEvent::Disconnected(reason) => {
+            *connected = false;
             warn!(%reason, "simulated house disconnected; retrying");
             Vec::new()
         }
@@ -159,7 +167,7 @@ mod tests {
                 mover.advance(SignedDuration::from_secs(1));
             }
         });
-        let (house, startup) = House::new(&sim);
+        let (house, _) = House::new(&sim);
         let (link, publisher) = connect(
             &mqtt(port, "sim"),
             house.subscriptions(),
@@ -168,7 +176,6 @@ mod tests {
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(run(
             house,
-            startup,
             link,
             publisher,
             clock,

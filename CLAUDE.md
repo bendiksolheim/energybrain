@@ -8,6 +8,10 @@ keep it up to date if a decision changes.
 - `just test` — `cargo test --workspace --all-features`
 - `just cov` — `cargo llvm-cov --workspace --all-features --fail-under-lines 100 --ignore-filename-regex '(^|/)main\.rs$'`
 - `just run` — run locally with `config/example.toml`
+- `just dev` — energybrain + simulated house on accelerated time, against mosquitto in an Apple
+  container (`just dev-down` stops it; `just sim <control> <value>`, `just dev-pub`, `just dev-sub`
+  poke and watch it). See `docs/dev.md`. The user runs these; `container` doesn't work in the
+  Claude Code sandbox.
 
 ## Non-negotiables
 - **100 % line coverage**, enforced. The only excluded file is `crates/app/src/main.rs`, which holds plumbing only. No coverage-exclusion attributes, no `cfg(coverage)`. If something can't be tested, refactor it.
@@ -190,3 +194,7 @@ keep it up to date if a decision changes.
   `config/dev.toml` and `config/sim.toml` are committed (no credentials; un-ignored in
   `.gitignore`); a sim test asserts `dev.toml` has the same zones, topics and tariff as
   `example.toml`.
+- S5: the sim driver drops what the house publishes while disconnected (rumqttc only drains its
+  bounded request queue while connected, so a full queue would block the loop and Ctrl-C) and
+  republishes every thermostat's retained values on each connect. Dev broker: anonymous mosquitto
+  without persistence, recreated by every `just dev`.

@@ -185,7 +185,12 @@ What to look for:
 just check   # fmt, clippy -D warnings, all tests, 100 % line coverage gate
 just test
 just run     # with config/example.toml (connects to the real broker!)
+just dev     # against a simulated house, at 6× speed, no home network needed
 ```
+
+- **Running locally.** [docs/dev.md](docs/dev.md) explains how `just dev` runs energybrain
+  against a simulated house (meter, thermostats, heat pump, EV) on accelerated time, and
+  how to change the house while it runs.
 
 - **Design.** [PLAN.md](PLAN.md) holds the design, and [CLAUDE.md](CLAUDE.md) the working
   rules and decision log.

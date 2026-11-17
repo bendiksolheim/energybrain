@@ -124,13 +124,22 @@ impl House {
             next_energy,
             queue: Vec::new(),
         };
-        let mut out = Vec::new();
-        for i in 0..house.floors.len() {
-            out.push(house.setpoint_report(i));
-            out.push(house.power_report(i));
-            out.push(house.energy_report(i));
-        }
+        let out = house.retained();
         (house, out)
+    }
+
+    /// Every thermostat's current setpoint, power and energy, retained: what a broker that
+    /// lost its state needs to be told again.
+    pub fn retained(&self) -> Vec<Publish> {
+        (0..self.floors.len())
+            .flat_map(|i| {
+                [
+                    self.setpoint_report(i),
+                    self.power_report(i),
+                    self.energy_report(i),
+                ]
+            })
+            .collect()
     }
 
     /// The simulated instant the house has reached.

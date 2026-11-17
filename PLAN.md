@@ -668,6 +668,9 @@ Two files, so the production config schema (unknown keys rejected) stays free of
   energybrain's MQTT connection already retries, so a broker that is still starting is
   harmless.
 - `just dev-down`: stops and removes the broker container.
+- `just sim <control> <value>` publishes `sim/<control>/set`, `just dev-pub <topic> <value>`
+  anything, and `just dev-sub [topic]` watches the broker, all through `container exec` into the
+  broker container (no local mosquitto clients needed).
 - To verify in S5: whether Apple `container` can mount a single file. The plan mounts
   the directory to avoid depending on that.
 
