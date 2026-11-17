@@ -499,6 +499,12 @@ Goal: run energybrain on the dev Mac, away from the home network, against a simu
 that publishes live data on the same topics and in the same formats as the real devices,
 with time running faster (default 6×: one hour in ten minutes).
 
+**Purpose: a developer tool for watching behaviour, not a test harness.** The point is to
+tweak values (energybrain's config, the house, live control topics) and see for yourself
+what energybrain does. The guard's correctness is verified by the core scenario tests and
+the app's end-to-end test, not by the simulator. Its own tests exist for the 100 % line
+coverage gate and to keep its wire format in step with energybrain's parser, and no more.
+
 ### Decisions
 - **Production keeps mosquitto.** Embedding a broker (rmqtt/rumqttd) in energybrain would
   make every release or crash take down the house's MQTT bus (Z-Wave JS UI, Homebridge,
@@ -553,7 +559,7 @@ Two files, so the production config schema (unknown keys rejected) stays free of
   factor = 6                       # simulated seconds per real second (1–3600)
   start = "2026-12-01T16:00"       # required; local time in the energybrain config's zone
   seed = 1                         # every random choice derives from it
-  initial_mode = "active"          # published to energybrain/mode/set at startup (optional)
+  initial_mode = "active"          # written to the fresh dev database before start (optional)
   outdoor_c = -5.0                 # heat-pump load and floor heat loss
   indoor_c = 20.0                  # floors lose heat to indoor + 20 % towards outdoor
   register_kwh = 10000             # the meter's A+ register at the start
@@ -634,16 +640,21 @@ Two files, so the production config schema (unknown keys rejected) stays free of
     `House::on_message(topic, payload, now) -> Vec<Publish>`. No I/O and no clock: time
     comes in as an argument. It gets most of the tests, including insta snapshots of a
     simulated hour;
-  - `driver.rs`: the thin async loop. A rumqttc client, a real-time interval of
-    `step / factor`, and `ScaledClock` for `now`. It is tested against an embedded
-    `rumqttd`;
-  - `lib.rs`: `run_dev(energybrain_config, sim_config, clock, shutdown)`, which spawns the
-    driver and calls `energybrain::run` with the shared clock and the scaled tick;
-  - `main.rs`: plumbing only (args, logging, signals). It is excluded from coverage by
-    the existing `main.rs` regex.
-- End-to-end test in `sim`: embedded `rumqttd` + `run_dev` with a `SimClock` as the inner
-  clock, starting an EV session → energybrain sheds `bad` first; stopping it → a
-  staggered restore.
+  - `driver.rs`: the thin async loop. It uses energybrain's own MQTT transport
+    (`energybrain_mqtt::transport`, plus a `publish_bytes` for HAN frames), steps the
+    house on a real-time interval with `now` from the shared clock, hands it inbound
+    messages, and logs a one-line summary each simulated minute (time, total power by
+    load, heating floors) next to energybrain's own log lines. Bad control payloads are
+    logged, not fatal. Tested against an embedded `rumqttd` for coverage: messages
+    arrive, a `/set` is echoed, a bad control is survived, a disconnect is logged,
+    shutdown returns;
+  - `main.rs`: plumbing only, excluded from coverage by the existing `main.rs` regex.
+    It loads both configs, builds the `ScaledClock` over `SystemClock`, seeds the fresh
+    store with `initial_mode` (`Output::PersistMode`), spawns the driver and runs
+    `energybrain::run` with tick `clock.real(10 s)`, then stops both on Ctrl-C.
+- No end-to-end test of the simulator together with energybrain: it would mostly repeat
+  the scenario tests, on timing that is hard to make deterministic. `just dev` is where
+  the two meet.
 
 ### just recipes
 - `just dev`, which:
@@ -672,8 +683,8 @@ DST-day start.
 physics, the meter and thermostat publishing schedules, echo on `/set`, control topics.
 Pure and fully unit-tested, with a snapshot of one simulated hour.
 
-**S4 — Driver + dev binary.** MQTT driver, `run_dev`, `main.rs`, the end-to-end test
-against embedded `rumqttd`, `config/dev.toml`, `config/sim.toml`.
+**S4 — Driver + dev binary.** MQTT driver (tests against embedded `rumqttd`), `main.rs`,
+`config/dev.toml`, `config/sim.toml`.
 
 **S5 — Recipes + docs.** `deploy/dev/mosquitto/mosquitto.conf`, `just dev` /
 `just dev-down`, `docs/dev.md` (how to run, control topics, reading `/api/state` and

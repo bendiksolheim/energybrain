@@ -121,13 +121,19 @@ impl Publisher {
 
     /// Queues a message for publishing.
     pub async fn publish(&self, p: &Publish) -> Result<(), PublishError> {
+        self.publish_bytes(&p.topic, p.payload.clone().into_bytes(), p.retain)
+            .await
+    }
+
+    /// Queues a message with a binary payload (the simulated meter's HAN frames).
+    pub async fn publish_bytes(
+        &self,
+        topic: &str,
+        payload: Vec<u8>,
+        retain: bool,
+    ) -> Result<(), PublishError> {
         self.0
-            .publish(
-                p.topic.clone(),
-                QoS::AtLeastOnce,
-                p.retain,
-                p.payload.clone(),
-            )
+            .publish(topic, QoS::AtLeastOnce, retain, payload)
             .await?;
         Ok(())
     }

@@ -1,0 +1,102 @@
+# The simulated house for `just dev`. Change anything here and restart; while it runs, the
+# sim/… control topics change the house live (see docs/dev.md). Every key is optional
+# except `start`; omitted keys show their default.
+
+# Simulated seconds per real second: 6 → one hour in ten minutes. 1–3600.
+factor = 6
+# Local time the simulation starts at. A December evening, just before the dinner peak.
+start = "2026-12-01T16:00"
+# Every random choice (noise, appliance starts, starting floor temperatures) follows it.
+seed = 1
+# energybrain's mode at the start: off, observe (reports "would write") or active (sheds).
+initial_mode = "active"
+# Drives the heat pump and how much the floors lose. Change live: sim/outdoor/set.
+outdoor_c = -5.0
+# Floors lose heat to indoor_c + 20 % towards outdoor_c (here 15 °C) unless ambient_c is set.
+indoor_c = 20.0
+# The meter's cumulative import register at the start.
+register_kwh = 10000
+
+# Everything except floors, heat pump, appliances and EV, by local hour (0–23).
+[background]
+profile_kw = [
+  0.35, 0.30, 0.30, 0.30, 0.30, 0.35, 0.80, 1.20, 1.00, 0.70, 0.60, 0.60,
+  0.70, 0.60, 0.60, 0.70, 1.00, 1.40, 1.60, 1.40, 1.10, 0.90, 0.70, 0.50,
+]
+noise_kw = 0.15
+
+# Idle at 15 °C outdoors, full power at −15 °C, linear in between.
+[heat_pump]
+max_kw = 1.5
+
+# Random appliance runs: `per_day` starts on average, only between from_hour and to_hour.
+[[appliance]]
+name = "kettle"
+kw = 2.0
+minutes = 3
+per_day = 4
+
+[[appliance]]
+name = "oven"
+kw = 2.5
+minutes = 45
+per_day = 1
+from_hour = 16
+to_hour = 19
+
+[[appliance]]
+name = "dishwasher"
+kw = 1.8
+minutes = 60
+per_day = 1
+from_hour = 19
+to_hour = 23
+
+[[appliance]]
+name = "washing machine"
+kw = 2.0
+minutes = 90
+per_day = 0.7
+from_hour = 8
+to_hour = 21
+
+# Daily EV charging. At 7.4 kW the hour can't stay under 5 kWh whatever is shed, so
+# energybrain reports the limit as unreachable. Start a session by hand: sim/ev/set 7.4.
+[[ev]]
+from = "22:00"
+kwh = 15
+kw = 7.4
+
+# Floor physics per zone (zones come from config/dev.toml). Heater sizes are guesses,
+# except Vaskerom's measured ~575 W; energybrain learns them from the power reports.
+[[floor]]
+zone = "bad"
+heater_kw = 1.5
+setpoint = 26
+
+[[floor]]
+zone = "vaskerom"
+heater_kw = 0.6
+setpoint = 25
+
+[[floor]]
+zone = "gang"
+heater_kw = 1.0
+setpoint = 22
+
+[[floor]]
+zone = "utleie_1"
+heater_kw = 0.8
+setpoint = 18
+
+[[floor]]
+zone = "utleie_2"
+heater_kw = 0.8
+setpoint = 18
+
+# The basement is kept at 15 °C and loses heat to cold ground, not to the house.
+[[floor]]
+zone = "kjeller"
+heater_kw = 1.0
+setpoint = 15
+ambient_c = 8

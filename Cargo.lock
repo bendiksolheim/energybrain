@@ -589,17 +589,23 @@ dependencies = [
 name = "energybrain-sim"
 version = "0.1.0"
 dependencies = [
+ "energybrain",
  "energybrain-config",
  "energybrain-core",
  "energybrain-han",
  "energybrain-mqtt",
+ "energybrain-store",
  "insta",
  "jiff",
+ "rumqttd",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "toml 1.2.1+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

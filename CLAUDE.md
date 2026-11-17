@@ -181,3 +181,12 @@ keep it up to date if a decision changes.
   of `rand`). `House` is pure discrete-event code like the engine; its tests feed every
   published message through energybrain's real `Translator` (dev-dependency on
   `energybrain-mqtt`) so the simulated wire format can't drift from what energybrain parses.
+- The simulator is a **developer tool for watching behaviour, not a test harness** (user
+  decision): no end-to-end test of simulator + energybrain; its tests exist for the coverage gate
+  and to keep its wire format in step with energybrain's parser.
+- S4: the sim driver reuses `energybrain_mqtt::transport` (new `Publisher::publish_bytes` for
+  binary HAN frames). `initial_mode` is written to the fresh dev database (`PersistMode`) before
+  energybrain starts, instead of publishing `mode/set`, which could race energybrain's subscribe.
+  `config/dev.toml` and `config/sim.toml` are committed (no credentials; un-ignored in
+  `.gitignore`); a sim test asserts `dev.toml` has the same zones, topics and tariff as
+  `example.toml`.

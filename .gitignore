@@ -3,6 +3,9 @@ lcov.info
 # Real configs carry broker credentials; only config/example.toml is committed.
 /config/*.toml
 !/config/example.toml
+# Dev configs point at the local dev broker and hold no credentials.
+!/config/dev.toml
+!/config/sim.toml
 *.db
 *.db-*
 .env

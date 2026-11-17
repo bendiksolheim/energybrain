@@ -59,7 +59,7 @@ pub struct SimConfig {
     pub start: Timestamp,
     /// Seed for every random choice.
     pub seed: u64,
-    /// Published to `<prefix>/mode/set` at startup, if set.
+    /// The mode to start energybrain in, if set (written to its fresh database).
     pub initial_mode: Option<Mode>,
     /// Outdoor temperature at the start.
     pub outdoor: Celsius,
@@ -80,8 +80,6 @@ pub struct SimConfig {
     pub floors: Vec<FloorSpec>,
     /// The meter topic.
     pub meter_topic: String,
-    /// energybrain's topic prefix.
-    pub prefix: String,
     /// The house's time zone.
     pub tz: TimeZone,
 }
@@ -338,7 +336,6 @@ impl Raw {
             ev,
             floors: floors(self.floors, eb)?,
             meter_topic: eb.topics.meter.clone(),
-            prefix: eb.topics.prefix.clone(),
             tz,
         })
     }
@@ -493,7 +490,6 @@ pub(crate) mod tests {
         assert_eq!(c.heat_pump, Kw::new(1.5));
         assert!(c.appliances.is_empty() && c.ev.is_empty());
         assert_eq!(c.meter_topic, "tibber");
-        assert_eq!(c.prefix, "energybrain");
         assert_eq!(c.tz.iana_name(), Some("Europe/Oslo"));
         // Every zone gets a floor, in the energybrain order, with its nominal power.
         let ids: Vec<_> = c.floors.iter().map(|f| f.topics.zone.as_str()).collect();
@@ -721,6 +717,23 @@ pub(crate) mod tests {
             floor("ambient_c = nan"),
             "floor[0].ambient_c: NaN is not a number"
         );
+    }
+
+    #[test]
+    fn the_dev_configs_are_valid_and_describe_the_real_house() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dev = energybrain_config::load(&root.join("config/dev.toml"), &|_| None).unwrap();
+        let sim = load(&root.join("config/sim.toml"), &dev).unwrap();
+        assert_eq!(sim.factor.get(), 6);
+        assert_eq!(sim.initial_mode, Some(Mode::Active));
+        assert_eq!(dev.mqtt.host, "127.0.0.1");
+        assert_eq!(dev.store_path, PathBuf::from("target/dev/energybrain.db"));
+        // Same zones, topics and tariff as the real house.
+        let real = eb();
+        assert_eq!(dev.topics, real.topics);
+        assert_eq!(dev.engine.zones, real.engine.zones);
+        assert_eq!(dev.engine.tariff, real.engine.tariff);
+        assert_eq!(dev.engine.target, real.engine.target);
     }
 
     #[test]

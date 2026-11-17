@@ -1,0 +1,100 @@
+# energybrain against the simulated house (`just dev`). The same house as example.toml,
+# pointed at the local dev broker, with the values worth experimenting with written out.
+# Every key is documented in config/example.toml. Times are in simulated time: at the
+# default 6× in config/sim.toml, `min_shed_minutes = 5` passes in 50 real seconds.
+
+timezone = "Europe/Oslo"
+
+[mqtt]
+host = "127.0.0.1"   # mosquitto in an Apple container, started by `just dev`
+port = 1883
+
+[http]
+listen = "127.0.0.1:8080"   # /api/state, /api/events, /metrics, /healthz
+
+[store]
+path = "target/dev/energybrain.db"   # deleted by `just dev` before every run
+
+[meter]
+topic = "tibber"
+power_window_secs = 60
+stale_after_secs = 120
+
+[tariff]
+tiers = [
+  { to_kw = 2, price = 131 },
+  { to_kw = 5, price = 233 },
+  { to_kw = 10, price = 397 },
+  { to_kw = 15, price = 585 },
+  { to_kw = 20, price = 775 },
+  { to_kw = 25, price = 964 },
+  { to_kw = 50, price = 1655 },
+  { to_kw = 75, price = 2599 },
+  { to_kw = 100, price = 3544 },
+  { to_kw = 150, price = 5117 },
+  { to_kw = 200, price = 7003 },
+  { to_kw = 300, price = 10147 },
+  { to_kw = 400, price = 13925 },
+  { to_kw = 500, price = 17697 },
+  { price = 21473 },
+]
+target_kw = 5
+safety_margin_kwh = 0.3
+
+[guard]
+release_margin_kwh = 0.3
+min_shed_minutes = 5
+restore_stagger_minutes = 2
+settle_secs = 90
+
+[actuator]
+deadband = 0.25
+min_interval_secs = 60
+
+[zones]
+echo_tolerance = 0.25
+override_minutes = 120
+heating_threshold_kw = 0.05
+learn_rate = 0.2
+
+[thermostat]
+setpoint = "67/1/setpoint/1"
+power = "50/1/value/66049"
+energy = "50/1/value/65537"
+
+[[zone]]
+id = "bad"
+name = "Bad"
+device = "zwave/Bad/Gulv_bad"
+priority = 1
+
+[[zone]]
+id = "vaskerom"
+name = "Vaskerom"
+device = "zwave/Vaskerom/Varmekabel"
+priority = 2
+nominal_kw = 0.6
+
+[[zone]]
+id = "gang"
+name = "Gang"
+device = "zwave/Gang/Gulv_gang"
+priority = 3
+
+[[zone]]
+id = "utleie_1"
+name = "Utleie 1"
+device = "zwave/Utleie/Gulv_utleie_1"
+priority = 4
+
+[[zone]]
+id = "utleie_2"
+name = "Utleie 2"
+device = "zwave/Utleie/Gulv_utleie_2"
+priority = 5
+
+[[zone]]
+id = "kjeller"
+name = "Kjeller"
+device = "zwave/Kjeller/Gulv_kjeller"
+priority = 6

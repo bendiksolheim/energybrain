@@ -79,7 +79,7 @@ pub struct House {
 
 impl House {
     /// The house at `cfg.start`, and what it publishes on startup: every thermostat's
-    /// retained values and, if configured, the initial mode for energybrain.
+    /// retained values.
     pub fn new(cfg: &SimConfig) -> (Self, Vec<Publish>) {
         let mut rng = Rng::new(cfg.seed);
         let floors: Vec<Floor> = cfg
@@ -130,13 +130,6 @@ impl House {
             out.push(house.power_report(i));
             out.push(house.energy_report(i));
         }
-        if let Some(mode) = cfg.initial_mode {
-            out.push(Publish::text(
-                format!("{}/mode/set", cfg.prefix),
-                mode.as_str(),
-                false,
-            ));
-        }
         (house, out)
     }
 
@@ -153,6 +146,39 @@ impl House {
     /// The floors.
     pub fn floors(&self) -> &[Floor] {
         &self.floors
+    }
+
+    /// One log line: local time, whole-house power by load, and the floors heating.
+    pub fn summary(&self) -> String {
+        let b = self.loads.breakdown(self.now);
+        let heating: Vec<&str> = self
+            .floors
+            .iter()
+            .filter(|f| f.heating())
+            .map(|f| f.spec().topics.zone.as_str())
+            .collect();
+        format!(
+            "{} {:.2} kW = floors {:.2} + background {:.2} + heat pump {:.2} + appliances {:.2} \
+             + ev {:.2} + extra {:.2}; heating: {}{}",
+            self.tz.to_datetime(self.now).strftime("%a %H:%M"),
+            self.power().value(),
+            self.floors_power().value(),
+            b.background.value(),
+            b.heat_pump.value(),
+            b.appliances.value(),
+            b.ev.value(),
+            b.extra.value(),
+            if heating.is_empty() {
+                "none".to_owned()
+            } else {
+                heating.join(", ")
+            },
+            if self.meter_paused {
+                " (meter paused)"
+            } else {
+                ""
+            },
+        )
     }
 
     /// Topic filters the house must subscribe to: setpoint writes and the control topics.
@@ -480,7 +506,6 @@ mod tests {
     use std::fmt::Write as _;
 
     use energybrain_core::io::Input;
-    use energybrain_core::mode::Mode;
     use energybrain_mqtt::translate::{Decoded, Translator};
     use serde_json::Value;
 
@@ -525,31 +550,25 @@ mod tests {
 
     #[test]
     fn startup_publishes_retained_thermostat_values_and_the_mode() {
-        let (h, out) = house(r#"initial_mode = "active""#);
+        let (h, out) = house("");
         assert_eq!(h.now(), ts("2026-12-01T15:00:00Z"));
-        assert_eq!(out.len(), 6 * 3 + 1);
+        assert_eq!(out.len(), 6 * 3);
         assert_eq!(out[0], Publish::text(BAD_SETPOINT.into(), "22", true));
         assert_eq!(out[1].topic, BAD_POWER);
         assert!(["1000.0", "0.1"].contains(&text(&out[1])));
         assert_eq!(text(&out[2]), "0.00");
-        assert!(out[..18].iter().all(|p| p.retain));
-        assert_eq!(
-            out[18],
-            Publish::text("energybrain/mode/set".into(), "active", false)
-        );
+        assert!(out.iter().all(|p| p.retain));
         assert_eq!(h.floors().len(), 6);
         let subs = h.subscriptions();
         assert_eq!(subs[0], format!("{BAD_SETPOINT}/set"));
         assert_eq!(&subs[6..], ["sim/+/set", "sim/zone/+/setpoint/set"]);
-        // Without an initial mode, energybrain's own persisted mode is left alone.
-        assert_eq!(house("").1.len(), 18);
     }
 
     #[test]
     fn an_hour_on_the_wire_is_what_energybrain_expects() {
         let config = eb();
         let tr = Translator::new(&config.topics, config.engine.calendar.time_zone().clone());
-        let (mut h, out) = house(r#"initial_mode = "active""#);
+        let (mut h, out) = house("");
         let mut decoded: Vec<Decoded> = out
             .iter()
             .map(|p| tr.decode(&p.topic, &p.payload, h.now()))
@@ -611,10 +630,6 @@ mod tests {
         );
         // sim/state every minute and the Pulse's JSON status are ignored by energybrain.
         assert!(ignored >= 61 + 6, "{ignored}");
-        assert!(decoded.iter().any(|d| matches!(
-            d,
-            Decoded::Inputs(i) if matches!(i[..], [Input::SetMode { mode: Mode::Active, .. }])
-        )));
     }
 
     #[test]
@@ -737,6 +752,37 @@ mod tests {
         );
         assert_eq!(h.on_message("sim/ev", b"1"), Ok(vec![]));
         assert_eq!(h.on_message("elsewhere/set", b"1"), Ok(vec![]));
+    }
+
+    #[test]
+    fn summary_line() {
+        let (mut h, _) = house("");
+        h.on_message("sim/ev/set", b"7.4").unwrap();
+        h.on_message("sim/zone/bad/setpoint/set", b"40").unwrap();
+        h.step(h.now() + secs(1));
+        let line = h.summary();
+        assert!(line.starts_with("Tue 16:00 "), "{line}");
+        assert!(
+            line.contains(" + ev 7.40 + extra 0.00; heating: bad"),
+            "{line}"
+        );
+        h.on_message("sim/meter/set", b"pause").unwrap();
+        for i in 0..6 {
+            h.on_message(
+                &format!(
+                    "sim/zone/{}/setpoint/set",
+                    h.floors()[i].spec().topics.zone.as_str()
+                ),
+                b"5",
+            )
+            .unwrap();
+        }
+        h.step(h.now() + secs(1));
+        assert!(
+            h.summary().ends_with("heating: none (meter paused)"),
+            "{}",
+            h.summary()
+        );
     }
 
     #[test]

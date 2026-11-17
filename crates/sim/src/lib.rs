@@ -4,6 +4,7 @@
 //! unchanged against it. See PLAN.md §7.
 
 pub mod config;
+pub mod driver;
 pub mod floor;
 pub mod house;
 pub mod loads;
