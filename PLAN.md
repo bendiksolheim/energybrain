@@ -524,11 +524,12 @@ with time running faster (default 6×: one hour in ten minutes).
   in the workspace; `rumqttd` stays a dev-dependency (sim tests).
 
 ### Accelerated time
-- `energybrain_core::clock::ScaledClock<C: Clock>`: at construction it records
-  `(real_anchor = inner.now(), sim_anchor = start)`, then
-  `now() = sim_anchor + (inner.now() − real_anchor) × factor`. It is pure, because it only
-  reads its inner clock, so it belongs in core and is tested with `SimClock` as the inner
-  clock.
+- `energybrain_core::clock::ScaledClock::new(inner: Arc<dyn Clock>, start, factor:
+  NonZeroU16)`: at construction it records `real_anchor = inner.now()`, then
+  `now() = start + (inner.now() − real_anchor) × factor` (saturating). It is pure, because
+  it only reads its inner clock, so it belongs in core and is tested with `SimClock` as the
+  inner clock. `ScaledClock::real(simulated)` converts a simulated duration into the real
+  one, e.g. for the tick.
 - Every engine duration (settle, min shed, stagger, staleness, override, actuator
   min-interval) is measured with `clock.now()`, so it scales automatically.
 - Real-time timers in `app` that must scale: the `tick` (10 s → `10 s / factor`), which
