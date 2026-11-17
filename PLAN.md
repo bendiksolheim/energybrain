@@ -91,11 +91,14 @@ energybrain/                     (repo root = the folder Claude Code starts in)
 │   ├── han/       energybrain-han     pure Kaifa HDLC/DLMS frame parser (Tibber Pulse raw)
 │   ├── store/     energybrain-store   rusqlite (bundled) persistence behind a trait
 │   ├── http/      energybrain-http    axum: /healthz, /metrics, /api/state
-│   └── app/       energybrain         binary: runtime loop (lib.rs) + main.rs plumbing
+│   ├── app/       energybrain         binary: runtime loop (lib.rs) + main.rs plumbing
+│   └── sim/       energybrain-sim     dev only: simulated house (meter, thermostats,
+│                                      loads) + `energybrain-sim` binary, see §7
 ├── tests/fixtures/              recorded/synthetic HAN + thermostat traces
 ├── deploy/
 │   ├── Dockerfile
-│   └── docker-compose.yml       energybrain only (metrics stack dropped for phase 1)
+│   ├── docker-compose.yml       energybrain only (metrics stack dropped for phase 1)
+│   └── dev/mosquitto/           mosquitto.conf for the local dev broker (§7)
 └── .github/workflows/ci.yml
 ```
 
@@ -487,3 +490,177 @@ switch the HomeKit switch to active.
 
 Adding an `Input` variant or `ProposalKind` variant should cause compile errors at every
 place that must handle it. Don't use `_ =>` catch-alls on these enums.
+
+---
+
+## 7. Local development: simulated house
+
+Goal: run energybrain on the dev Mac, away from the home network, against a simulated house
+that publishes live data on the same topics and in the same formats as the real devices,
+with time running faster (default 6×: one hour in ten minutes).
+
+### Decisions
+- **Production keeps mosquitto.** Embedding a broker (rmqtt/rumqttd) in energybrain would
+  make every release or crash take down the house's MQTT bus (Z-Wave JS UI, Homebridge,
+  Tibber Pulse), and would put broker code under the coverage gate. Rejected.
+- **Dev broker: mosquitto in an Apple container** (`container` CLI 1.0; Docker isn't
+  installed). It's the same broker as production, needs no broker code, and is started by
+  `just dev`. It runs anonymous and **without persistence**, and `just dev` recreates it
+  every run, so retained topics from an earlier run (mode, setpoints, other simulated
+  times) never leak into the next one.
+- **The simulated house and energybrain run natively in one process** (`energybrain-sim`
+  binary). Both need the same accelerated clock, and one shared `Arc<dyn Clock>` is far
+  simpler than keeping two processes in agreement. Running natively also keeps
+  edit → `cargo run` fast.
+- **The simulated house is an ordinary MQTT client.** It publishes real Kaifa HDLC frames
+  and Z-Wave JS UI value-only numbers, so the real translator, the HAN parser and the
+  transport are all exercised. No dev-only code paths in energybrain's adapters.
+- **Fresh state every run.** Simulated time runs ahead of the wall clock, so a reused
+  database would already hold hours "after" the next run's start. `just dev` deletes the
+  dev database (`target/dev/energybrain.db`) before starting.
+- **No new dependencies.** The randomness in the house model comes from a hand-rolled,
+  seeded SplitMix64 (a few lines) instead of `rand`, so runs are reproducible from
+  `seed`. The sim uses `rumqttc`, `tokio`, `jiff`, `serde` and `toml`, which are already
+  in the workspace; `rumqttd` stays a dev-dependency (sim tests).
+
+### Accelerated time
+- `energybrain_core::clock::ScaledClock<C: Clock>`: at construction it records
+  `(real_anchor = inner.now(), sim_anchor = start)`, then
+  `now() = sim_anchor + (inner.now() − real_anchor) × factor`. It is pure, because it only
+  reads its inner clock, so it belongs in core and is tested with `SimClock` as the inner
+  clock.
+- Every engine duration (settle, min shed, stagger, staleness, override, actuator
+  min-interval) is measured with `clock.now()`, so it scales automatically.
+- Real-time timers in `app` that must scale: the `tick` (10 s → `10 s / factor`), which
+  `Runtime` already takes as a parameter. `retry_delay`, MQTT keep-alive and the 2 s
+  shutdown flush stay in real time, because they concern the real broker.
+  `/healthz`'s `max_status_age = max(30 s, 3 × tick)` is compared against simulated
+  time; with the tick scaled down it stays 30 s simulated, which is correct (one status
+  per 10 s simulated).
+- `factor` is limited to 1–3600. Above ~60× the real MQTT round trip becomes noticeable
+  in simulated time (100 ms real = 6 s simulated at 60×). That's fine for the
+  guard, but worth knowing when reading events.
+
+### Configuration
+Two files, so the production config schema (unknown keys rejected) stays free of dev keys:
+- `config/dev.toml`: a normal energybrain config, the same as `example.toml` except
+  `mqtt.host = "127.0.0.1"`, no credentials, `http.listen = "127.0.0.1:8080"`,
+  `store.path = "target/dev/energybrain.db"`. Committed (it holds no secrets).
+- `config/sim.toml`: parsed by the sim crate, with the same validation style as the
+  energybrain config (typed errors naming the key, unknown keys rejected):
+  ```toml
+  factor = 6                       # simulated seconds per real second
+  start = "2026-12-01T16:00"       # local time in the energybrain config's timezone
+  seed = 1
+  initial_mode = "active"          # published to energybrain/mode/set at startup
+  outdoor_c = -5.0                 # drives floor heat loss and heat-pump load
+
+  [background]                     # whole-house load excluding floors, EV, heat pump
+  profile_kw = [0.4, 0.4, …]       # 24 values, one per local hour
+  noise_kw = 0.15
+
+  [heat_pump]
+  max_kw = 1.5                     # scales with outdoor temperature, cycles on/off
+
+  [[appliance]]                    # random short loads: kettle, oven, washer, …
+  name = "kettle"; kw = 2.0; minutes = 3; per_day = 4
+
+  [[ev]]                           # scheduled sessions, plus manual control (below)
+  from = "17:30"; kwh = 20.0; kw = 7.4
+
+  [[floor]]                        # one per energybrain zone id; physics only
+  zone = "bad"; heater_kw = 1.5; setpoint = 26.0; loss = 0.8
+  ```
+  The simulated thermostats are built from the energybrain config's zones and topics, so
+  they always match what energybrain subscribes to. `sim.toml` only adds the physical
+  model per zone id and must name exactly the configured zones.
+
+### Simulated devices (what goes on the wire)
+- **Meter** (topic `meter.topic`, raw bytes), timed in simulated time:
+  - list 1 (power, W) every 2.5 s, list 2 every 10 s;
+  - list 3 at hh:00:10, with the meter clock set to hh:00:10 and the A+ register value
+    as it was at hh:00:00, matching the real meter and `Register::captured_at`;
+  - the header date-time is local wall time with deviation `0x8000` and the DST bit
+    `0x80` set in summer;
+  - one Pulse-style `{"status":{…}}` JSON message now and then, which must be ignored.
+- **Thermostats** (Z-TRM3 per zone, value-only plain numbers), timed in simulated time:
+  - setpoint, published retained at startup and on change;
+  - on `<setpoint>/set`, the new value is echoed twice within 1 s;
+  - power in W (~0.1 when idle), on change and every ~90 s;
+  - the kWh counter, which grows with the heater's energy, published every 5 min.
+- **Floor model:** floor temperature `T` with
+  `dT/dt = gain × heater_on − loss × (T − f(outdoor))`, and a thermostat with ±0.5 °C
+  hysteresis around its setpoint. A shed (setpoint − 4 °C) therefore keeps the heater off
+  until the floor really cools, as in reality. A user change via MQTT (publishing a new
+  setpoint on the device's own topic, as the Z-Wave panel would) is supported, to test
+  overrides.
+- **Whole-house power** = background profile + noise + appliances + heat pump + EV +
+  Σ floor heaters. It is integrated into the A+ register.
+- **Control topics** (`sim/…`, for poking at a live run from MQTT Explorer or
+  `mosquitto_pub`):
+  - `sim/ev/set` takes `off` or a power in kW;
+  - `sim/load/set` adds extra load in kW;
+  - `sim/meter/set` takes `pause` or `resume`, to test the stale-meter path;
+  - `sim/outdoor/set` takes a temperature in °C;
+  - `sim/zone/<id>/setpoint/set` is a user setpoint change, as if made on the panel;
+  - `sim/state` is retained JSON with simulated time, the load breakdown and floor
+    temperatures, republished every simulated minute.
+
+### Structure (same functional-core pattern as energybrain)
+- `crates/han`: add `encode` (list 1/2/3 frame builder, HDLC framing with FCS, COSEM
+  date-time). Tests: re-encoding the parsed values of each real fixture in
+  `tests/fixtures/han/` reproduces it byte for byte; a proptest checks that
+  `parse(encode(x)) == x`.
+- `crates/sim` (`energybrain-sim`):
+  - `config.rs`: `sim.toml` → typed `SimConfig`, validated against the energybrain
+    `Config`;
+  - `rng.rs`: SplitMix64;
+  - `house.rs`: the pure model. `House::step(now) -> Vec<Publish>` and
+    `House::on_message(topic, payload, now) -> Vec<Publish>`. No I/O and no clock: time
+    comes in as an argument. It gets most of the tests, including insta snapshots of a
+    simulated hour;
+  - `driver.rs`: the thin async loop. A rumqttc client, a real-time interval of
+    `step / factor`, and `ScaledClock` for `now`. It is tested against an embedded
+    `rumqttd`;
+  - `lib.rs`: `run_dev(energybrain_config, sim_config, clock, shutdown)`, which spawns the
+    driver and calls `energybrain::run` with the shared clock and the scaled tick;
+  - `main.rs`: plumbing only (args, logging, signals). It is excluded from coverage by
+    the existing `main.rs` regex.
+- End-to-end test in `sim`: embedded `rumqttd` + `run_dev` with a `SimClock` as the inner
+  clock, starting an EV session → energybrain sheds `bad` first; stopping it → a
+  staggered restore.
+
+### just recipes
+- `just dev`, which:
+  1. runs `container system start` (does nothing if already running);
+  2. removes any old `energybrain-mqtt` container;
+  3. runs `container run -d --name energybrain-mqtt -p 127.0.0.1:1883:1883`, with
+     `deploy/dev/mosquitto` mounted as `/mosquitto/config`, using `eclipse-mosquitto:2`;
+  4. removes `target/dev/energybrain.db*`;
+  5. runs `cargo run -p energybrain-sim -- config/dev.toml config/sim.toml`.
+
+  energybrain's MQTT connection already retries, so a broker that is still starting is
+  harmless.
+- `just dev-down`: stops and removes the broker container.
+- To verify in S5: whether Apple `container` can mount a single file. The plan mounts
+  the directory to avoid depending on that.
+
+### Milestones
+Each ends with `just check` green and a commit, as for M0–M10.
+
+**S1 — HAN encoder.** `energybrain_han::encode` + fixture round-trip + proptest.
+
+**S2 — ScaledClock.** In core, with tests: anchor, scaling, factor 1 is identity, and a
+DST-day start.
+
+**S3 — House model.** `sim` crate: `SimConfig` parsing/validation, SplitMix64, floor
+physics, the meter and thermostat publishing schedules, echo on `/set`, control topics.
+Pure and fully unit-tested, with a snapshot of one simulated hour.
+
+**S4 — Driver + dev binary.** MQTT driver, `run_dev`, `main.rs`, the end-to-end test
+against embedded `rumqttd`, `config/dev.toml`, `config/sim.toml`.
+
+**S5 — Recipes + docs.** `deploy/dev/mosquitto/mosquitto.conf`, `just dev` /
+`just dev-down`, `docs/dev.md` (how to run, control topics, reading `/api/state` and
+`/api/events` in simulated time), a README link, and CLAUDE.md (commands, decision log:
+the new crate, mosquitto in Apple containers for dev, no embedded broker in production).
