@@ -138,6 +138,27 @@ unit!(
     Kr,
     " kr"
 );
+unit!(
+    /// Reactive power in kilovolt-ampere reactive (reported by the meter, not used by the
+    /// guard).
+    Kvar,
+    " kvar"
+);
+unit!(
+    /// Reactive energy in kilovolt-ampere reactive hours.
+    Kvarh,
+    " kvarh"
+);
+unit!(
+    /// Electric current in amperes.
+    Ampere,
+    " A"
+);
+unit!(
+    /// Electric potential in volts.
+    Volt,
+    " V"
+);
 
 additive!(Kw);
 additive!(Kwh);
@@ -236,6 +257,10 @@ mod tests {
         assert_eq!(Celsius::new(21.0).to_string(), "21 °C");
         assert_eq!(CelsiusDelta::new(-4.0).to_string(), "-4 K");
         assert_eq!(Kr::new(233.0).to_string(), "233 kr");
+        assert_eq!(Kvar::new(0.25).to_string(), "0.25 kvar");
+        assert_eq!(Kvarh::new(3.5).to_string(), "3.5 kvarh");
+        assert_eq!(Ampere::new(9.5).to_string(), "9.5 A");
+        assert_eq!(Volt::new(230.1).to_string(), "230.1 V");
     }
 
     #[test]
@@ -253,6 +278,14 @@ mod tests {
         assert_eq!(d.min(CelsiusDelta::ZERO), CelsiusDelta::ZERO);
         assert_eq!(Kr::new(5.0).max(Kr::ZERO), Kr::new(5.0));
         assert_eq!(Kr::new(5.0).min(Kr::ZERO), Kr::ZERO);
+        assert_eq!(Kvar::new(1.0).max(Kvar::ZERO), Kvar::new(1.0));
+        assert_eq!(Kvar::new(1.0).min(Kvar::ZERO), Kvar::ZERO);
+        assert_eq!(Kvarh::new(1.0).max(Kvarh::ZERO), Kvarh::new(1.0));
+        assert_eq!(Kvarh::new(1.0).min(Kvarh::ZERO), Kvarh::ZERO);
+        assert_eq!(Ampere::new(1.0).max(Ampere::ZERO), Ampere::new(1.0));
+        assert_eq!(Ampere::new(1.0).min(Ampere::ZERO).value(), 0.0);
+        assert_eq!(Volt::new(1.0).max(Volt::ZERO), Volt::new(1.0));
+        assert_eq!(Volt::new(1.0).min(Volt::ZERO), Volt::ZERO);
     }
 
     /// Exercises every additive operator for one type.

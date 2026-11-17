@@ -11,12 +11,17 @@
 //! Date-times are COSEM 12-byte values. Kaifa sends **local wall-clock time** with the
 //! UTC deviation unspecified, so turning them into instants needs the time zone; the
 //! clock-status DST bit (0x80) resolves the repeated hour on the fall-back day.
+//!
+//! [`encode`] is the inverse of [`parse`], for simulating a meter in development.
 
 mod dlms;
+mod encode;
 mod hdlc;
 
+pub use encode::encode;
+
 use energybrain_core::time::HourStart;
-use energybrain_core::units::{Kw, Kwh};
+use energybrain_core::units::{Ampere, Kvar, Kvarh, Kw, Kwh, Volt};
 use jiff::civil::DateTime;
 use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Timestamp};
@@ -70,6 +75,12 @@ pub enum HanError {
     /// An element of the wrong type.
     #[error("element {0} has an unexpected type")]
     UnexpectedValue(usize),
+    /// [`encode`]: a text field too long for a short DLMS string (at most 127 bytes).
+    #[error("text field of {0} bytes is too long to encode")]
+    TextTooLong(usize),
+    /// [`encode`]: a register without details; list 3 always carries list 2.
+    #[error("a register can only be encoded together with details")]
+    RegisterWithoutDetails,
 }
 
 /// A COSEM date-time as sent by the meter.
@@ -132,7 +143,7 @@ impl MeterTime {
     }
 }
 
-/// Identity and export power, from lists 2 and 3.
+/// Identity, export power and the electrical values, from lists 2 and 3.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Details {
     /// List version identifier, e.g. `KFM_001`.
@@ -143,6 +154,31 @@ pub struct Details {
     pub meter_type: String,
     /// Active export power.
     pub export_power: Kw,
+    /// Reactive import power (Q+).
+    pub reactive_import: Kvar,
+    /// Reactive export power (Q−).
+    pub reactive_export: Kvar,
+    /// Currents and voltages; their count tells a 1-phase from a 3-phase meter.
+    pub phases: Phases,
+}
+
+/// Per-phase current and voltage.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Phases {
+    /// A 1-phase meter.
+    One {
+        /// Current.
+        current: Ampere,
+        /// Voltage.
+        voltage: Volt,
+    },
+    /// A 3-phase meter (L1, L2, L3). On an IT net the meter reports UL2 as 0.
+    Three {
+        /// Currents.
+        currents: [Ampere; 3],
+        /// Voltages.
+        voltages: [Volt; 3],
+    },
 }
 
 /// The cumulative registers, from list 3.
@@ -154,6 +190,10 @@ pub struct Register {
     pub import: Kwh,
     /// Cumulative active export (A−).
     pub export: Kwh,
+    /// Cumulative reactive import (R+).
+    pub reactive_import: Kvarh,
+    /// Cumulative reactive export (R−).
+    pub reactive_export: Kvarh,
 }
 
 impl Register {
@@ -194,26 +234,48 @@ pub fn parse(payload: &[u8]) -> Result<Reading, HanError> {
     let Value::Structure(items) = note.body else {
         return Err(HanError::UnexpectedValue(0));
     };
-    let watts =
-        |i: usize| -> Result<Kw, HanError> { Ok(Kw::new(f64::from(u32_at(&items, i)?) / 1000.0)) };
+    // Every number on the wire is a u32 in milli-units, except voltage (0.1 V).
+    let milli = |i: usize| -> Result<f64, HanError> { Ok(f64::from(u32_at(&items, i)?) / 1000.0) };
+    let deci = |i: usize| -> Result<f64, HanError> { Ok(f64::from(u32_at(&items, i)?) / 10.0) };
     let (details, register) = match items.len() {
         1 => (None, None),
         n @ (9 | 13 | 14 | 18) => {
+            let phases = if matches!(n, 9 | 14) {
+                Phases::One {
+                    current: Ampere::new(milli(7)?),
+                    voltage: Volt::new(deci(8)?),
+                }
+            } else {
+                Phases::Three {
+                    currents: [
+                        Ampere::new(milli(7)?),
+                        Ampere::new(milli(8)?),
+                        Ampere::new(milli(9)?),
+                    ],
+                    voltages: [
+                        Volt::new(deci(10)?),
+                        Volt::new(deci(11)?),
+                        Volt::new(deci(12)?),
+                    ],
+                }
+            };
             let details = Details {
                 list_id: text_at(&items, 0)?,
                 meter_id: text_at(&items, 1)?,
                 meter_type: text_at(&items, 2)?,
-                export_power: watts(4)?,
+                export_power: Kw::new(milli(4)?),
+                reactive_import: Kvar::new(milli(5)?),
+                reactive_export: Kvar::new(milli(6)?),
+                phases,
             };
             let register = if matches!(n, 14 | 18) {
                 let base = n - 5;
-                let wh = |i: usize| -> Result<Kwh, HanError> {
-                    Ok(Kwh::new(f64::from(u32_at(&items, i)?) / 1000.0))
-                };
                 Some(Register {
                     clock: MeterTime::parse(time_at(&items, base)?)?,
-                    import: wh(base + 1)?,
-                    export: wh(base + 2)?,
+                    import: Kwh::new(milli(base + 1)?),
+                    export: Kwh::new(milli(base + 2)?),
+                    reactive_import: Kvarh::new(milli(base + 3)?),
+                    reactive_export: Kvarh::new(milli(base + 4)?),
                 })
             } else {
                 None
@@ -225,7 +287,7 @@ pub fn parse(payload: &[u8]) -> Result<Reading, HanError> {
     let first = if details.is_some() { 3 } else { 0 };
     Ok(Reading {
         sent,
-        import_power: watts(first)?,
+        import_power: Kw::new(milli(first)?),
         details,
         register,
     })
@@ -261,7 +323,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::hdlc::tests::frame;
+    use crate::hdlc::frame;
 
     fn fixture(name: &str) -> Vec<u8> {
         let path = format!(
@@ -303,6 +365,16 @@ mod tests {
         assert_eq!(d.meter_id, "1234567890123456");
         assert_eq!(d.meter_type, "MA304H3E");
         assert_eq!(d.export_power, Kw::ZERO);
+        assert_eq!(d.reactive_import, Kvar::ZERO);
+        assert_eq!(d.reactive_export, Kvar::new(0.246));
+        assert_eq!(
+            d.phases,
+            Phases::Three {
+                currents: [Ampere::new(5.901), Ampere::new(22.094), Ampere::new(21.52)],
+                // IT net: UL2 reads 0.
+                voltages: [Volt::new(238.9), Volt::ZERO, Volt::new(237.9)],
+            }
+        );
         assert!(r.import_power > Kw::ZERO);
         assert_eq!(r.register, None);
     }
@@ -314,6 +386,8 @@ mod tests {
         let reg = r.register.unwrap();
         assert_eq!(reg.import, Kwh::new(263_743.035));
         assert_eq!(reg.export, Kwh::ZERO);
+        assert_eq!(reg.reactive_import, Kvarh::new(1_174.651));
+        assert_eq!(reg.reactive_export, Kvarh::new(16_631.855));
         assert_eq!(reg.clock.datetime, date(2026, 11, 15).at(22, 0, 10, 0));
         // 22:00:10 local in November is 21:00:10Z; the registers belong to 21:00:00Z.
         assert_eq!(
@@ -375,6 +449,8 @@ mod tests {
             clock: meter_time(dt, None, None),
             import: Kwh::ZERO,
             export: Kwh::ZERO,
+            reactive_import: Kvarh::ZERO,
+            reactive_export: Kvarh::ZERO,
         };
         assert!(
             reg.captured_at(&TimeZone::fixed(Offset::from_hours(-2).unwrap()))
@@ -388,6 +464,8 @@ mod tests {
             clock: meter_time(date(2026, 11, 15).at(22, 5, 0, 0), None, Some(false)),
             import: Kwh::ZERO,
             export: Kwh::ZERO,
+            reactive_import: Kvarh::ZERO,
+            reactive_export: Kvarh::ZERO,
         };
         assert_eq!(
             reg.captured_at(&oslo()).unwrap(),
@@ -458,7 +536,15 @@ mod tests {
         let r = parse(&one_phase(false)).unwrap();
         assert_eq!(r.sent, None);
         assert_eq!(r.import_power, Kw::new(1.5));
-        assert_eq!(r.details.unwrap().export_power, Kw::new(0.2));
+        let d = r.details.unwrap();
+        assert_eq!(d.export_power, Kw::new(0.2));
+        assert_eq!(
+            d.phases,
+            Phases::One {
+                current: Ampere::new(6.0),
+                voltage: Volt::new(230.0),
+            }
+        );
         let r = parse(&one_phase(true)).unwrap();
         let reg = r.register.unwrap();
         assert_eq!(reg.import, Kwh::new(1000.0));
@@ -551,6 +637,14 @@ mod tests {
             (
                 HanError::UnexpectedValue(4),
                 "element 4 has an unexpected type",
+            ),
+            (
+                HanError::TextTooLong(200),
+                "text field of 200 bytes is too long to encode",
+            ),
+            (
+                HanError::RegisterWithoutDetails,
+                "a register can only be encoded together with details",
             ),
         ];
         for (e, msg) in all {

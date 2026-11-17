@@ -171,3 +171,9 @@ keep it up to date if a decision changes.
   it is presumed lost and the report wins (so it is retried). Without this, leaving Active or
   shutting down right after a shed write saw the stale pre-write report equal to the base and
   skipped the restore, leaving the zone shed (flaky e2e test on CI).
+- Local dev (PLAN.md §7): production keeps mosquitto (no embedded broker); dev runs mosquitto
+  in an Apple container and an in-process simulated house on an accelerated clock.
+- S1: `energybrain_han::encode` is the exact inverse of `parse` (it reproduces the real fixtures
+  byte for byte). To make that possible `parse` now returns every value in the lists (Q±,
+  per-phase currents/voltages as `Phases::One`/`Three`, R±), with new units `Kvar`, `Kvarh`,
+  `Ampere`, `Volt` in core. The HDLC `frame` builder moved from tests into `hdlc.rs`.

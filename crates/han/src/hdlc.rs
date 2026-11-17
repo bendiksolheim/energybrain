@@ -98,6 +98,27 @@ pub fn information(frame: &[u8]) -> Result<&[u8], HanError> {
     body.get(c.pos()..).ok_or(HanError::Truncated)
 }
 
+/// Wraps an information field in a frame as a Kaifa meter sends it: destination address
+/// 0x01, source address 0x02 0x01, control 0x10 (UI frame), header and frame checksums.
+pub fn frame(info: &[u8]) -> Vec<u8> {
+    let len = 2 + 1 + 2 + 1 + 2 + info.len() + 2;
+    // Callers keep frames far below the 11-bit length (`encode` limits each text field to
+    // 127 bytes, so its largest frame is under 600 bytes), so masking loses nothing.
+    #[allow(clippy::cast_possible_truncation)]
+    let len = len as u16 & LENGTH_MASK;
+    let mut inner = (FORMAT_TYPE_3 | len).to_be_bytes().to_vec();
+    inner.extend([0x01, 0x02, 0x01, 0x10]);
+    let hcs = crc16(&inner);
+    inner.extend(hcs.to_le_bytes());
+    inner.extend(info);
+    let fcs = crc16(&inner);
+    inner.extend(fcs.to_le_bytes());
+    let mut out = vec![FLAG];
+    out.extend(inner);
+    out.push(FLAG);
+    out
+}
+
 /// Skips an HDLC address (1–4 bytes; the last has its low bit set).
 fn address(c: &mut Cursor<'_>) -> Result<(), HanError> {
     for _ in 0..4 {
@@ -109,27 +130,11 @@ fn address(c: &mut Cursor<'_>) -> Result<(), HanError> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
 
-    /// Wraps an information field in a valid frame (1-byte dest, 2-byte source address).
-    pub(crate) fn frame(info: &[u8]) -> Vec<u8> {
-        let len = u16::try_from(2 + 1 + 2 + 1 + 2 + info.len() + 2).unwrap();
-        let mut inner = (FORMAT_TYPE_3 | len).to_be_bytes().to_vec();
-        inner.extend([0x01, 0x02, 0x01, 0x10]);
-        let hcs = crc16(&inner);
-        inner.extend(hcs.to_le_bytes());
-        inner.extend(info);
-        let fcs = crc16(&inner);
-        inner.extend(fcs.to_le_bytes());
-        let mut out = vec![FLAG];
-        out.extend(inner);
-        out.push(FLAG);
-        out
-    }
-
     /// Recomputes the FCS after a test has tampered with the frame.
-    pub(crate) fn refcs(f: &mut [u8]) {
+    fn refcs(f: &mut [u8]) {
         let n = f.len();
         let fcs = crc16(&f[1..n - 3]).to_le_bytes();
         f[n - 3] = fcs[0];
