@@ -556,22 +556,22 @@ mod tests {
         serde_json::from_slice(&last.payload).unwrap()
     }
 
-    const BAD_SETPOINT: &str = "zwave/Bad/Gulv_bad/67/1/setpoint/1";
-    const BAD_POWER: &str = "zwave/Bad/Gulv_bad/50/1/value/66049";
+    const BATHROOM_SETPOINT: &str = "zwave/Bathroom/Floor_bathroom/67/1/setpoint/1";
+    const BATHROOM_POWER: &str = "zwave/Bathroom/Floor_bathroom/50/1/value/66049";
 
     #[test]
     fn startup_publishes_retained_thermostat_values_and_the_mode() {
         let (h, out) = house("");
         assert_eq!(h.now(), ts("2026-12-01T15:00:00Z"));
         assert_eq!(out.len(), 6 * 3);
-        assert_eq!(out[0], Publish::text(BAD_SETPOINT.into(), "22", true));
-        assert_eq!(out[1].topic, BAD_POWER);
+        assert_eq!(out[0], Publish::text(BATHROOM_SETPOINT.into(), "22", true));
+        assert_eq!(out[1].topic, BATHROOM_POWER);
         assert!(["1000.0", "0.1"].contains(&text(&out[1])));
         assert_eq!(text(&out[2]), "0.00");
         assert!(out.iter().all(|p| p.retain));
         assert_eq!(h.floors().len(), 6);
         let subs = h.subscriptions();
-        assert_eq!(subs[0], format!("{BAD_SETPOINT}/set"));
+        assert_eq!(subs[0], format!("{BATHROOM_SETPOINT}/set"));
         assert_eq!(&subs[6..], ["sim/+/set", "sim/zone/+/setpoint/set"]);
     }
 
@@ -647,10 +647,10 @@ mod tests {
     fn setpoint_writes_are_echoed_twice_within_a_second() {
         let (mut h, _) = house("");
         h.step(h.now() + secs(5));
-        let write = format!("{BAD_SETPOINT}/set");
+        let write = format!("{BATHROOM_SETPOINT}/set");
         assert_eq!(h.on_message(&write, b"21.7"), Ok(vec![]));
         let out = h.step(h.now() + secs(1));
-        assert_eq!(on(&out, BAD_SETPOINT), ["21.5", "21.5"]);
+        assert_eq!(on(&out, BATHROOM_SETPOINT), ["21.5", "21.5"]);
         assert_eq!(h.floors()[0].setpoint(), Celsius::new(21.5));
         assert_eq!(
             h.on_message(&write, b"warm"),
@@ -665,18 +665,20 @@ mod tests {
     #[test]
     fn heater_switching_is_reported_at_once_and_otherwise_every_90_seconds() {
         let (mut h, _) = house(
-            "[[floor]]\nzone = \"bad\"\nsetpoint = 26\n[[floor]]\nzone = \"gang\"\nsetpoint = 26",
+            "[[floor]]\nzone = \"bathroom\"\nsetpoint = 26\n[[floor]]\nzone = \"hallway\"\nsetpoint = 26",
         );
         let out = h.step(h.now() + SignedDuration::from_mins(10));
-        let reports = on(&out, BAD_POWER).len();
+        let reports = on(&out, BATHROOM_POWER).len();
         assert!((6..=8).contains(&reports), "{reports}");
         // Make sure the floor heats, then shed it: the heater stops within a second.
-        h.on_message(&format!("{BAD_SETPOINT}/set"), b"30").unwrap();
+        h.on_message(&format!("{BATHROOM_SETPOINT}/set"), b"30")
+            .unwrap();
         h.step(h.now() + secs(1));
         assert!(h.floors()[0].heating());
-        h.on_message(&format!("{BAD_SETPOINT}/set"), b"22").unwrap();
+        h.on_message(&format!("{BATHROOM_SETPOINT}/set"), b"22")
+            .unwrap();
         let out = h.step(h.now() + secs(1));
-        assert_eq!(on(&out, BAD_POWER), ["0.1"]);
+        assert_eq!(on(&out, BATHROOM_POWER), ["0.1"]);
         assert!(!h.floors()[0].heating());
     }
 
@@ -684,7 +686,7 @@ mod tests {
     fn energy_counters_are_reported_every_five_minutes() {
         let (mut h, _) = house("");
         let out = h.step(h.now() + SignedDuration::from_mins(30));
-        let counts = on(&out, "zwave/Bad/Gulv_bad/50/1/value/65537");
+        let counts = on(&out, "zwave/Bathroom/Floor_bathroom/50/1/value/65537");
         assert_eq!(counts.len(), 6);
         let values: Vec<f64> = counts.iter().map(|c| c.parse().unwrap()).collect();
         assert!(values.windows(2).all(|w| w[0] <= w[1]), "{values:?}");
@@ -746,15 +748,20 @@ mod tests {
             h.on_message("sim/outdoor/set", b"cold"),
             Err("not a number: \"cold\"".into())
         );
-        let out = h.on_message("sim/zone/gang/setpoint/set", b"24").unwrap();
-        assert_eq!(on(&out, "zwave/Gang/Gulv_gang/67/1/setpoint/1"), ["24"]);
+        let out = h
+            .on_message("sim/zone/hallway/setpoint/set", b"24")
+            .unwrap();
+        assert_eq!(
+            on(&out, "zwave/Hallway/Floor_hallway/67/1/setpoint/1"),
+            ["24"]
+        );
         assert_eq!(state(&out)["floors"][2]["setpoint"]["value"], 24.0);
         assert_eq!(
-            h.on_message("sim/zone/stue/setpoint/set", b"24"),
-            Err("unknown zone \"stue\"".into())
+            h.on_message("sim/zone/attic/setpoint/set", b"24"),
+            Err("unknown zone \"attic\"".into())
         );
         assert_eq!(
-            h.on_message("sim/zone/gang/setpoint/set", b"x"),
+            h.on_message("sim/zone/hallway/setpoint/set", b"x"),
             Err("not a number: \"x\"".into())
         );
         assert_eq!(
@@ -769,12 +776,13 @@ mod tests {
     fn summary_line() {
         let (mut h, _) = house("");
         h.on_message("sim/ev/set", b"7.4").unwrap();
-        h.on_message("sim/zone/bad/setpoint/set", b"40").unwrap();
+        h.on_message("sim/zone/bathroom/setpoint/set", b"40")
+            .unwrap();
         h.step(h.now() + secs(1));
         let line = h.summary();
         assert!(line.starts_with("Tue 16:00 "), "{line}");
         assert!(
-            line.contains(" + ev 7.40 + extra 0.00; heating: bad"),
+            line.contains(" + ev 7.40 + extra 0.00; heating: bathroom"),
             "{line}"
         );
         h.on_message("sim/meter/set", b"pause").unwrap();

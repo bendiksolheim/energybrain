@@ -344,7 +344,7 @@ mod tests {
         assert_eq!(code, StatusCode::OK);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["mode"], "observe");
-        assert_eq!(v["zones"][0]["id"], "bad");
+        assert_eq!(v["zones"][0]["id"], "bathroom");
         assert_eq!(
             get(&r.state, "/api/events").await,
             (StatusCode::OK, "[]".to_owned())

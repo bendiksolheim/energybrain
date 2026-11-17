@@ -68,35 +68,35 @@ kwh = 15
 kw = 7.4
 
 # Floor physics per zone (zones come from config/dev.toml). Heater sizes are guesses,
-# except Vaskerom's measured ~575 W; energybrain learns them from the power reports.
+# except Laundry's measured ~575 W; energybrain learns them from the power reports.
 [[floor]]
-zone = "bad"
+zone = "bathroom"
 heater_kw = 1.5
 setpoint = 26
 
 [[floor]]
-zone = "vaskerom"
+zone = "laundry"
 heater_kw = 0.6
 setpoint = 25
 
 [[floor]]
-zone = "gang"
+zone = "hallway"
 heater_kw = 1.0
 setpoint = 22
 
 [[floor]]
-zone = "utleie_1"
+zone = "guest_1"
 heater_kw = 0.8
 setpoint = 18
 
 [[floor]]
-zone = "utleie_2"
+zone = "guest_2"
 heater_kw = 0.8
 setpoint = 18
 
 # The basement is kept at 15 °C and loses heat to cold ground, not to the house.
 [[floor]]
-zone = "kjeller"
+zone = "basement"
 heater_kw = 1.0
 setpoint = 15
 ambient_c = 8

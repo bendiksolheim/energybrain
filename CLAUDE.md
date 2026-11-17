@@ -31,7 +31,8 @@ keep it up to date if a decision changes.
 - M0 needs answers from the user (HAN payloads, Z-Wave topics, tariff table). Ask early, and record the answers in the section below and in `config/example.toml`.
 
 ## Environment facts (fill in during M0)
-- MQTT broker: `192.168.1.172:1883`, no TLS, username + password. Credentials live only in a
+- MQTT broker: on the LAN, port 1883 (the real address lives only in the gitignored config;
+  `config/example.toml` uses the placeholder `192.168.1.10`), no TLS, username + password. Credentials live only in a
   gitignored config file (`config/*.toml` except `example.toml` is ignored) — never commit them.
 - HAN reader + topics + payload format: Tibber Pulse (local MQTT) on a **Kaifa MA304H3E**
   (3-phase, list id `KFM_001`, IT net: UL2 reads 0).
@@ -49,14 +50,15 @@ keep it up to date if a decision changes.
   `50/1/value/66049` (power W, reported on change and roughly every 90 s, ~0.1 W when idle),
   `50/1/value/65537` (kWh total), `66/1/state` (1 = heating, 0 = idle), `64/1/mode` (1 = heat),
   `49/2` / `49/4` `Air_temperature` (room / floor sensor), `status` (`true` = alive).
-  Devices: `Bad/Gulv_bad`, `Gang/Gulv_gang`, `Kjeller/Gulv_kjeller`, `Utleie/Gulv_utleie_1`,
-  `Utleie/Gulv_utleie_2`, `Vaskerom/Varmekabel` (measured ~575 W when on).
-  Shed priority (lower sheds first, configurable): 1 `bad`, 2 `vaskerom`, 3 `gang`,
-  4 `utleie_1`, 5 `utleie_2`, 6 `kjeller` (already at 15 °C, little to gain). The Utleie
-  zones are a rental unit, currently empty: shedding allowed, but must stay switchable per
+  Devices (anonymised in the repo; real names only in the gitignored config):
+  `Bathroom/Floor_bathroom`, `Hallway/Floor_hallway`, `Basement/Floor_basement`,
+  `Guest/Floor_guest_1`, `Guest/Floor_guest_2`, `Laundry/Heating_cable` (measured ~575 W when on).
+  Shed priority (lower sheds first, configurable): 1 `bathroom`, 2 `laundry`, 3 `hallway`,
+  4 `guest_1`, 5 `guest_2`, 6 `basement` (already at 15 °C, little to gain). The guest
+  zones are a separate unit, currently empty: shedding allowed, but must stay switchable per
   zone (HomeKit `shed_allowed`). Heater sizes unknown → learned from power reports
-  (`nominal_kw` default 1 kW until learned). `shed_delta` 4 °C everywhere (Kjeller → 11 °C ok).
-  `Stue/Kontakt_tak` is a ceiling-light switch: ignored.
+  (`nominal_kw` default 1 kW until learned). `shed_delta` 4 °C everywhere (Basement → 11 °C ok).
+  `Living/Ceiling_light` is a ceiling-light switch: ignored.
 - Grid company + capacity tiers: **Tensio TS**. Tiers (kW, kr/month): 0–2 131, 2–5 233, 5–10 397,
   10–15 585, 15–20 775, 20–25 964, 25–50 1655, 50–75 2599, 75–100 3544, 100–150 5117,
   150–200 7003, 200–300 10147, 300–400 13925, 400–500 17697, >500 21473.

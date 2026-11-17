@@ -583,7 +583,7 @@ Two files, so the production config schema (unknown keys rejected) stays free of
   from = "17:30"; kwh = 20.0; kw = 7.4
 
   [[floor]]                        # per energybrain zone id; physics only, all optional
-  zone = "bad"; heater_kw = 1.5; setpoint = 26.0
+  zone = "bathroom"; heater_kw = 1.5; setpoint = 26.0
   capacity_kwh_per_k = 0.5; loss_kw_per_k = 0.08; ambient_c = 12.0
   ```
   The simulated thermostats are built from the energybrain config's zones and topics, so

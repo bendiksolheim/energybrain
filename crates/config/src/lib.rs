@@ -658,7 +658,7 @@ mod tests {
     #[test]
     fn the_example_is_valid_and_describes_the_house() {
         let c = ok(EXAMPLE);
-        assert_eq!(c.mqtt.host, "192.168.1.172");
+        assert_eq!(c.mqtt.host, "192.168.1.10");
         assert_eq!(c.mqtt.port, 1883);
         assert_eq!(c.mqtt.username, None);
         assert_eq!(c.topics.meter, "tibber");
@@ -683,26 +683,26 @@ mod tests {
         assert_eq!(
             order,
             [
-                ("bad", 1),
-                ("vaskerom", 2),
-                ("gang", 3),
-                ("utleie_1", 4),
-                ("utleie_2", 5),
-                ("kjeller", 6)
+                ("bathroom", 1),
+                ("laundry", 2),
+                ("hallway", 3),
+                ("guest_1", 4),
+                ("guest_2", 5),
+                ("basement", 6)
             ]
         );
-        let bad = &e.zones[0];
-        assert_eq!(bad.name, "Bad");
-        assert_eq!(bad.shed_delta, CelsiusDelta::new(4.0));
-        assert!(bad.shed_allowed);
+        let bathroom = &e.zones[0];
+        assert_eq!(bathroom.name, "Bathroom");
+        assert_eq!(bathroom.shed_delta, CelsiusDelta::new(4.0));
+        assert!(bathroom.shed_allowed);
         assert_eq!(e.zones[1].nominal_kw, Kw::new(0.6));
         assert_eq!(
             c.topics.zones[0],
             ZoneTopics {
-                zone: ZoneId::new("bad").unwrap(),
-                setpoint: "zwave/Bad/Gulv_bad/67/1/setpoint/1".to_owned(),
-                power: "zwave/Bad/Gulv_bad/50/1/value/66049".to_owned(),
-                energy: "zwave/Bad/Gulv_bad/50/1/value/65537".to_owned(),
+                zone: ZoneId::new("bathroom").unwrap(),
+                setpoint: "zwave/Bathroom/Floor_bathroom/67/1/setpoint/1".to_owned(),
+                power: "zwave/Bathroom/Floor_bathroom/50/1/value/66049".to_owned(),
+                energy: "zwave/Bathroom/Floor_bathroom/50/1/value/65537".to_owned(),
             }
         );
     }
@@ -795,7 +795,7 @@ mod tests {
             "timezone: ",
         ),
         (
-            "host = \"192.168.1.172\"",
+            "host = \"192.168.1.10\"",
             "host = \"\"",
             "mqtt.host: must not be empty",
         ),
@@ -887,22 +887,22 @@ mod tests {
             "tariff.tiers[14].price: ",
         ),
         (
-            "id = \"bad\"",
-            "id = \"Bad\"",
-            "zone[0].id: zone id \"Bad\" may only contain",
+            "id = \"bathroom\"",
+            "id = \"Bathroom\"",
+            "zone[0].id: zone id \"Bathroom\" may only contain",
         ),
         (
-            "id = \"vaskerom\"",
-            "id = \"bad\"",
-            "zone[1].id: duplicate id \"bad\"",
+            "id = \"laundry\"",
+            "id = \"bathroom\"",
+            "zone[1].id: duplicate id \"bathroom\"",
         ),
         (
-            "device = \"zwave/Bad/Gulv_bad\"",
+            "device = \"zwave/Bathroom/Floor_bathroom\"",
             "device = \"\"",
             "zone[0].device: ",
         ),
         (
-            "device = \"zwave/Bad/Gulv_bad\"",
+            "device = \"zwave/Bathroom/Floor_bathroom\"",
             "device = \"d\"\npower_topic = \"x/+\"",
             "zone[0].power_topic: ",
         ),

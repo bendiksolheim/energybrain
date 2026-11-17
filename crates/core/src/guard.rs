@@ -501,24 +501,28 @@ mod tests {
 
     #[test]
     fn quiet_hour_does_nothing() {
-        let mut r = Rig::new(&[("bad", 1, 1.5)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.5)]);
         assert_eq!(r.step(at(10, 0), 3.0), Vec::<GuardEvent>::new());
         assert_eq!(r.state.status, GuardStatus::Idle);
     }
 
     #[test]
     fn sheds_lowest_priority_number_first_and_only_as_many_as_needed() {
-        let mut r = Rig::new(&[("kjeller", 6, 1.0), ("bad", 1, 1.0), ("gang", 3, 1.0)]);
+        let mut r = Rig::new(&[
+            ("basement", 6, 1.0),
+            ("bathroom", 1, 1.0),
+            ("hallway", 3, 1.0),
+        ]);
         // At half past, 1 kW shed saves 0.5 kWh; excess 0.8 needs two zones.
         let ev = r.step(at(30, 0), 5.5);
-        assert_eq!(r.shed_ids(), ["bad", "gang"]);
+        assert_eq!(r.shed_ids(), ["bathroom", "hallway"]);
         assert_eq!(ev.len(), 2);
         assert_eq!(released(&ev), Vec::<(&str, ReleaseReason)>::new());
         assert!(
-            matches!(&ev[0], GuardEvent::Shed { zone, load, .. } if zone.as_str() == "bad" && *load == Kw::new(1.0))
+            matches!(&ev[0], GuardEvent::Shed { zone, load, .. } if zone.as_str() == "bathroom" && *load == Kw::new(1.0))
         );
         assert_eq!(r.state.status, GuardStatus::Shedding);
-        assert!(r.state.is_shed(&ZoneId::new("bad").unwrap()));
+        assert!(r.state.is_shed(&ZoneId::new("bathroom").unwrap()));
         assert!(
             r.state.shed[0]
                 .reason
@@ -543,29 +547,29 @@ mod tests {
 
     #[test]
     fn credit_prevents_shedding_again_before_the_meter_catches_up() {
-        let mut r = Rig::new(&[("bad", 1, 1.0), ("gang", 3, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0), ("hallway", 3, 1.0)]);
         r.step(at(30, 0), 5.0);
-        assert_eq!(r.shed_ids(), ["bad"]);
-        // The real meter still shows the old projection, but bad's reduction is credited
+        assert_eq!(r.shed_ids(), ["bathroom"]);
+        // The real meter still shows the old projection, but bathroom's reduction is credited
         // (still drawing, and within the settle window).
         assert_eq!(r.step(at(30, 10), 5.0), Vec::<GuardEvent>::new());
-        assert_eq!(r.shed_ids(), ["bad"]);
-        // Active mode: bad stops drawing; after `settle` the meter is trusted again.
-        r.stop_drawing("bad");
+        assert_eq!(r.shed_ids(), ["bathroom"]);
+        // Active mode: bathroom stops drawing; after `settle` the meter is trusted again.
+        r.stop_drawing("bathroom");
         assert_eq!(r.step(at(31, 0), 4.6), Vec::<GuardEvent>::new());
-        assert_eq!(r.shed_ids(), ["bad"]);
+        assert_eq!(r.shed_ids(), ["bathroom"]);
     }
 
     #[test]
     fn observe_mode_banks_savings_of_released_zones_until_the_hour_ends() {
-        let mut r = Rig::new(&[("bad", 1, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0)]);
         r.step(at(0, 0), 5.0);
-        assert_eq!(r.shed_ids(), ["bad"]);
+        assert_eq!(r.shed_ids(), ["bathroom"]);
         // Still drawing (nothing was written). Released 30 min later; it virtually saved
         // 0.5 kWh, which the meter never saw.
         assert_eq!(
             released(&r.step(at(30, 0), 3.5)),
-            [("bad", ReleaseReason::BelowLimit)]
+            [("bathroom", ReleaseReason::BelowLimit)]
         );
         assert_eq!(
             r.state.banked,
@@ -580,23 +584,23 @@ mod tests {
         assert_eq!(r.state.banked, None);
         // A zone that really switched off banks nothing.
         r.step(at(61, 0), 5.0);
-        r.stop_drawing("bad");
+        r.stop_drawing("bathroom");
         r.step(at(70, 0), 1.0);
         assert_eq!(r.state.banked, None);
     }
 
     #[test]
     fn idle_zones_are_not_shed() {
-        let mut r = Rig::new(&[("bad", 1, 0.01), ("gang", 3, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 0.01), ("hallway", 3, 1.0)]);
         r.step(at(30, 0), 5.0);
-        assert_eq!(r.shed_ids(), ["gang"]);
+        assert_eq!(r.shed_ids(), ["hallway"]);
     }
 
     #[test]
     fn unreachable_limit_sheds_everything_and_reports_once() {
-        let mut r = Rig::new(&[("bad", 1, 1.0), ("gang", 3, 0.5)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0), ("hallway", 3, 0.5)]);
         let ev = r.step(at(30, 0), 9.0);
-        assert_eq!(r.shed_ids(), ["bad", "gang"]);
+        assert_eq!(r.shed_ids(), ["bathroom", "hallway"]);
         assert!(
             matches!(ev.last(), Some(GuardEvent::LimitUnreachable { available, .. }) if (available.value() - 0.75).abs() < 1e-9)
         );
@@ -609,26 +613,26 @@ mod tests {
 
     #[test]
     fn release_waits_for_hysteresis_minimum_duration_and_stagger() {
-        let mut r = Rig::new(&[("bad", 1, 1.0), ("gang", 3, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0), ("hallway", 3, 1.0)]);
         r.step(at(10, 0), 6.5);
-        assert_eq!(r.shed_ids(), ["bad", "gang"]);
-        r.stop_drawing("bad");
-        r.stop_drawing("gang");
+        assert_eq!(r.shed_ids(), ["bathroom", "hallway"]);
+        r.stop_drawing("bathroom");
+        r.stop_drawing("hallway");
         // Well below the limit, but not shed long enough yet.
         assert_eq!(r.step(at(12, 0), 2.0), Vec::<GuardEvent>::new());
-        // Long enough, but bringing gang back would exceed limit − margin.
+        // Long enough, but bringing hallway back would exceed limit − margin.
         assert_eq!(r.step(at(16, 0), 4.0), Vec::<GuardEvent>::new());
         assert_eq!(r.state.status, GuardStatus::Shedding);
         // Comfortable: release the most recently shed zone first.
         assert_eq!(
             released(&r.step(at(16, 0), 2.0)),
-            [("gang", ReleaseReason::BelowLimit)]
+            [("hallway", ReleaseReason::BelowLimit)]
         );
         // The next release waits for the stagger.
         assert_eq!(r.step(at(17, 0), 2.0), Vec::<GuardEvent>::new());
         assert_eq!(
             released(&r.step(at(18, 0), 2.0)),
-            [("bad", ReleaseReason::BelowLimit)]
+            [("bathroom", ReleaseReason::BelowLimit)]
         );
         assert_eq!(r.state.status, GuardStatus::Idle);
         assert_eq!(r.step(at(20, 0), 2.0), Vec::<GuardEvent>::new());
@@ -636,24 +640,24 @@ mod tests {
 
     #[test]
     fn hour_rollover_does_not_force_a_release() {
-        let mut r = Rig::new(&[("bad", 1, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0)]);
         r.step(at(50, 0), 5.0);
-        r.stop_drawing("bad");
+        r.stop_drawing("bathroom");
         // New hour, load still high: the zone simply stays shed.
         let next = at(60, 10);
         assert_eq!(r.step(next, 4.6), Vec::<GuardEvent>::new());
-        assert_eq!(r.shed_ids(), ["bad"]);
+        assert_eq!(r.shed_ids(), ["bathroom"]);
     }
 
     #[test]
     fn stale_meter_releases_staggered_and_sheds_nothing() {
-        let mut r = Rig::new(&[("bad", 1, 1.0), ("gang", 3, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0), ("hallway", 3, 1.0)]);
         r.step(at(30, 0), 6.0);
-        assert_eq!(r.shed_ids(), ["bad", "gang"]);
+        assert_eq!(r.shed_ids(), ["bathroom", "hallway"]);
         let mut stale = meter(at(31, 0), 9.0);
         stale.freshness = Freshness::Stale;
         let ev = r.step_with(at(31, 0), &stale, true);
-        assert_eq!(released(&ev), [("gang", ReleaseReason::MeterStale)]);
+        assert_eq!(released(&ev), [("hallway", ReleaseReason::MeterStale)]);
         assert_eq!(r.state.status, GuardStatus::MeterStale);
         assert_eq!(
             r.step_with(at(32, 0), &stale, true),
@@ -662,29 +666,29 @@ mod tests {
         stale.freshness = Freshness::NoData;
         assert_eq!(
             released(&r.step_with(at(33, 0), &stale, true)),
-            [("bad", ReleaseReason::MeterStale)]
+            [("bathroom", ReleaseReason::MeterStale)]
         );
     }
 
     #[test]
     fn override_or_disabled_shedding_releases_immediately() {
-        let mut r = Rig::new(&[("bad", 1, 1.0), ("gang", 3, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0), ("hallway", 3, 1.0)]);
         r.step(at(30, 0), 6.0);
-        let gang = ZoneId::new("gang").unwrap();
-        r.zones.get_mut(&gang).unwrap().manual = Some(Override {
+        let hallway = ZoneId::new("hallway").unwrap();
+        r.zones.get_mut(&hallway).unwrap().manual = Some(Override {
             value: Celsius::new(25.0),
             until: at(150, 0),
         });
         r.zones
-            .get_mut(&ZoneId::new("bad").unwrap())
+            .get_mut(&ZoneId::new("bathroom").unwrap())
             .unwrap()
             .shed_allowed_override = Some(false);
         let ev = r.step(at(30, 10), 6.0);
         assert_eq!(
             released(&ev),
             [
-                ("bad", ReleaseReason::NotSheddable),
-                ("gang", ReleaseReason::NotSheddable)
+                ("bathroom", ReleaseReason::NotSheddable),
+                ("hallway", ReleaseReason::NotSheddable)
             ]
         );
         assert_eq!(r.state.shed, Vec::<Shed>::new());
@@ -692,7 +696,7 @@ mod tests {
 
     #[test]
     fn unknown_zone_is_released() {
-        let mut r = Rig::new(&[("bad", 1, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0)]);
         r.state.shed.push(Shed {
             zone: ZoneId::new("removed").unwrap(),
             since: at(0, 0),
@@ -707,15 +711,15 @@ mod tests {
 
     #[test]
     fn turning_the_guard_off_releases_everything_at_once() {
-        let mut r = Rig::new(&[("bad", 1, 1.0), ("gang", 3, 1.0)]);
+        let mut r = Rig::new(&[("bathroom", 1, 1.0), ("hallway", 3, 1.0)]);
         r.step(at(30, 0), 6.0);
         let m = meter(at(31, 0), 6.0);
         let ev = r.step_with(at(31, 0), &m, false);
         assert_eq!(
             released(&ev),
             [
-                ("bad", ReleaseReason::GuardOff),
-                ("gang", ReleaseReason::GuardOff)
+                ("bathroom", ReleaseReason::GuardOff),
+                ("hallway", ReleaseReason::GuardOff)
             ]
         );
         assert_eq!(r.state.status, GuardStatus::Disabled);

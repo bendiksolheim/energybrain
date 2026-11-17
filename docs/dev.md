@@ -41,7 +41,7 @@ The terminal shows energybrain's log: sheds, releases, writes and warnings. Ever
 minute the house adds a line of its own:
 
 ```
-INFO energybrain_sim::driver: Tue 17:42 6.31 kW = floors 2.90 + background 1.47 + heat pump 1.00 + appliances 0.00 + ev 0.00 + extra 0.00; heating: bad, gang, kjeller
+INFO energybrain_sim::driver: Tue 17:42 6.31 kW = floors 2.90 + background 1.47 + heat pump 1.00 + appliances 0.00 + ev 0.00 + extra 0.00; heating: bathroom, hallway, basement
 ```
 
 Open <http://127.0.0.1:8080/> for the history page. It follows the simulated clock: "today"
@@ -91,7 +91,7 @@ minute long. Above about 60×, MQTT's real round trip starts to show in simulate
 | `just sim load 2.5` | 2.5 kW of extra load (sauna, heater, …); `just sim load 0` removes it |
 | `just sim meter pause` | the meter goes silent (`resume` brings it back) |
 | `just sim outdoor -20` | outdoor temperature: more heat pump, floors lose heat faster |
-| `just sim zone/bad/setpoint 28` | someone turns the Bad thermostat to 28 °C on its panel |
+| `just sim zone/bathroom/setpoint 28` | someone turns the Bathroom thermostat to 28 °C on its panel |
 
 `just dev-pub <topic> <value>` publishes anything else, for example energybrain's own
 control topics.
@@ -99,7 +99,7 @@ control topics.
 ## Things to try
 
 - **The evening peak.** With the defaults, dinner (16–19, oven and kettle at random) and
-  the floors push the hour past 5 kWh. Watch `bad` get lowered first, then `vaskerom`,
+  the floors push the hour past 5 kWh. Watch `bathroom` get lowered first, then `laundry`,
   and the floors come back one at a time once the hour has room.
 - **An unreachable limit.** `just sim ev 7.4`: shedding every floor still can't keep the
   hour under the limit. energybrain reports `limit_unreachable` once. The daily session at
@@ -107,14 +107,14 @@ control topics.
 - **A stale meter.** `just sim meter pause` while floors are lowered. After
   `stale_after_secs`, about 20 s real, every floor is restored, one at a time, and
   `/healthz` turns 503. `just sim meter resume` brings the guard back.
-- **A user override.** While `bad` is lowered, `just sim zone/bad/setpoint 28`. energybrain
-  sees a setpoint above its cap, treats it as an override and leaves `bad` alone for
+- **A user override.** While `bathroom` is lowered, `just sim zone/bathroom/setpoint 28`. energybrain
+  sees a setpoint above its cap, treats it as an override and leaves `bathroom` alone for
   `override_minutes`.
 - **Observe mode.** `initial_mode = "observe"` in `sim.toml`, or live with
   `just dev-pub energybrain/mode/set observe`. The same `shed` and `release` events appear,
   with `"mode": "observe"`, and the log shows the setpoints energybrain would have
   written. No setpoint is actually changed.
-- **Protecting a zone.** `just dev-pub energybrain/zone/bad/shed_allowed/set 0`, and the
+- **Protecting a zone.** `just dev-pub energybrain/zone/bathroom/shed_allowed/set 0`, and the
   next floor in priority order is lowered instead.
 - **Tuning the guard.** Change the margins, `min_shed_minutes` or `restore_stagger_minutes`
   in `config/dev.toml` and run the same evening again. With the same `seed`, the house makes
@@ -126,7 +126,7 @@ control topics.
 
 - **Floors.** Each floor is one thermal mass. Its heater switches 0.5 °C either side of the
   setpoint, so a floor lowered by 4 °C stays off until it has really cooled, which takes
-  hours. Heater sizes are guesses, except Vaskerom's measured ~575 W.
+  hours. Heater sizes are guesses, except Laundry's measured ~575 W.
 - **The rest of the house.** Background use by hour of day with random noise, a heat pump
   that draws more the colder it is outside, appliances started at random within their
   hours, and EV sessions.

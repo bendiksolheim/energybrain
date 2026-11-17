@@ -495,17 +495,19 @@ pub(crate) mod tests {
         let ids: Vec<_> = c.floors.iter().map(|f| f.topics.zone.as_str()).collect();
         assert_eq!(
             ids,
-            ["bad", "vaskerom", "gang", "utleie_1", "utleie_2", "kjeller"]
+            [
+                "bathroom", "laundry", "hallway", "guest_1", "guest_2", "basement"
+            ]
         );
-        let vaskerom = &c.floors[1];
-        assert_eq!(vaskerom.heater, Kw::new(0.6));
-        assert_eq!(vaskerom.setpoint, Celsius::new(22.0));
-        assert_eq!(vaskerom.capacity, HeatCapacity::new(0.5));
-        assert_eq!(vaskerom.loss, HeatLoss::new(0.08));
-        assert_eq!(vaskerom.ambient, None);
+        let laundry = &c.floors[1];
+        assert_eq!(laundry.heater, Kw::new(0.6));
+        assert_eq!(laundry.setpoint, Celsius::new(22.0));
+        assert_eq!(laundry.capacity, HeatCapacity::new(0.5));
+        assert_eq!(laundry.loss, HeatLoss::new(0.08));
+        assert_eq!(laundry.ambient, None);
         assert_eq!(
-            vaskerom.topics.setpoint,
-            "zwave/Vaskerom/Varmekabel/67/1/setpoint/1"
+            laundry.topics.setpoint,
+            "zwave/Laundry/Heating_cable/67/1/setpoint/1"
         );
     }
 
@@ -536,7 +538,7 @@ pub(crate) mod tests {
             kwh = 20
             kw = 7.4
             [[floor]]
-            zone = "kjeller"
+            zone = "basement"
             heater_kw = 0.8
             setpoint = 15
             capacity_kwh_per_k = 0.7
@@ -577,12 +579,12 @@ pub(crate) mod tests {
                 power: Kw::new(7.4),
             }]
         );
-        let kjeller = &c.floors[5];
-        assert_eq!(kjeller.heater, Kw::new(0.8));
-        assert_eq!(kjeller.setpoint, Celsius::new(15.0));
-        assert_eq!(kjeller.capacity, HeatCapacity::new(0.7));
-        assert_eq!(kjeller.loss, HeatLoss::new(0.05));
-        assert_eq!(kjeller.ambient, Some(Celsius::new(10.0)));
+        let basement = &c.floors[5];
+        assert_eq!(basement.heater, Kw::new(0.8));
+        assert_eq!(basement.setpoint, Celsius::new(15.0));
+        assert_eq!(basement.capacity, HeatCapacity::new(0.7));
+        assert_eq!(basement.loss, HeatLoss::new(0.05));
+        assert_eq!(basement.ambient, Some(Celsius::new(10.0)));
         // The others keep their defaults.
         assert_eq!(c.floors[0].heater, Kw::new(1.0));
     }
@@ -685,14 +687,14 @@ pub(crate) mod tests {
     #[test]
     fn rejects_bad_floors() {
         assert_eq!(
-            err_with("[[floor]]\nzone = \"stue\""),
-            "floor[0].zone: \"stue\" is not a zone in the energybrain config"
+            err_with("[[floor]]\nzone = \"attic\""),
+            "floor[0].zone: \"attic\" is not a zone in the energybrain config"
         );
         assert_eq!(
-            err_with("[[floor]]\nzone = \"bad\"\n[[floor]]\nzone = \"bad\""),
-            "floor[1].zone: \"bad\" is listed twice"
+            err_with("[[floor]]\nzone = \"bathroom\"\n[[floor]]\nzone = \"bathroom\""),
+            "floor[1].zone: \"bathroom\" is listed twice"
         );
-        let floor = |field: &str| err_with(&format!("[[floor]]\nzone = \"gang\"\n{field}"));
+        let floor = |field: &str| err_with(&format!("[[floor]]\nzone = \"hallway\"\n{field}"));
         assert_eq!(
             floor("setpoint = 41"),
             "floor[0].setpoint: 41 is outside 5 °C–40 °C"

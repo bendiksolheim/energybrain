@@ -17,7 +17,7 @@ use tokio::time::timeout;
 use super::*;
 
 const NOW: &str = "2026-11-15T17:30:00Z";
-const SETPOINT: &str = "zwave/Bad/Gulv_bad/67/1/setpoint/1";
+const SETPOINT: &str = "zwave/Bathroom/Floor_bathroom/67/1/setpoint/1";
 
 fn ts(s: &str) -> Timestamp {
     s.parse().unwrap()
@@ -79,9 +79,9 @@ fn config(mqtt_port: u16, store: &Path) -> Config {
         tiers = [{{ to_kw = 5, price = 233 }}, {{ price = 397 }}]
         target_kw = 5
         [[zone]]
-        id = "bad"
-        name = "Bad"
-        device = "zwave/Bad/Gulv_bad"
+        id = "bathroom"
+        name = "Bathroom"
+        device = "zwave/Bathroom/Floor_bathroom"
         priority = 1
         "#,
         store.display()
@@ -217,7 +217,7 @@ fn history_reads_what_each_view_needs() {
                 quality: Quality::Measured,
             }),
             Output::PersistZoneHour {
-                zone: energybrain_core::ids::ZoneId::new("bad").unwrap(),
+                zone: energybrain_core::ids::ZoneId::new("bathroom").unwrap(),
                 hour,
                 kwh: Kwh::new(1.1),
             },
@@ -272,19 +272,22 @@ async fn end_to_end_shed_report_and_restore_on_shutdown() {
 
     world.send(SETPOINT, "26.5").await;
     world
-        .send("zwave/Bad/Gulv_bad/50/1/value/66049", "1500")
+        .send("zwave/Bathroom/Floor_bathroom/50/1/value/66049", "1500")
         .await;
     world
-        .send("zwave/Bad/Gulv_bad/50/1/value/65537", "not a number")
+        .send(
+            "zwave/Bathroom/Floor_bathroom/50/1/value/65537",
+            "not a number",
+        )
         .await;
     world
         .send("tibber", br#"{"status":{"rssi":-57}}"#.to_vec())
         .await;
     // The meter reports 6.4 kW: far above the 4.7 kWh limit. In observe mode the guard
-    // sheds Bad on paper only (status topics, no write).
+    // sheds Bathroom on paper only (status topics, no write).
     world.send("tibber", fixture("kaifa_ma304h3e_list1")).await;
     world.expect("energybrain/peakguard/active", "1").await;
-    world.expect("energybrain/zone/bad/shed", "1").await;
+    world.expect("energybrain/zone/bathroom/shed", "1").await;
     // Going active makes it real.
     // (The write comes before the status publish within one tick.)
     world.send("energybrain/mode/set", "active").await;
@@ -307,15 +310,15 @@ async fn end_to_end_shed_report_and_restore_on_shutdown() {
     assert!(month.contains(r#""month":"2026-11""#), "{month}");
     let metrics = http_get(http_port, "/metrics").await;
     assert!(
-        metrics.contains("energybrain_zone_writes_total{zone=\"bad\"} 1"),
+        metrics.contains("energybrain_zone_writes_total{zone=\"bathroom\"} 1"),
         "{metrics}"
     );
     assert!(
-        metrics.contains("energybrain_zone_would_write_total{zone=\"bad\"} 1"),
+        metrics.contains("energybrain_zone_would_write_total{zone=\"bathroom\"} 1"),
         "{metrics}"
     );
 
-    // Stopping restores Bad and keeps everything for the next start.
+    // Stopping restores Bathroom and keeps everything for the next start.
     stop.send(()).unwrap();
     world.expect(&format!("{SETPOINT}/set"), "26.5").await;
     timeout(Duration::from_secs(10), service)
@@ -329,10 +332,16 @@ async fn end_to_end_shed_report_and_restore_on_shutdown() {
         .load(ts("2026-11-01T00:00:00Z"))
         .unwrap();
     assert_eq!(state.mode, Some(Mode::Active));
-    let bad = &state.zones[&energybrain_core::ids::ZoneId::new("bad").unwrap()];
-    assert_eq!(bad.base, Some(Celsius::new(26.5)));
-    assert_eq!(bad.last_write.map(|(v, _)| v), Some(Celsius::new(26.5)));
-    assert_eq!(bad.heating_kw, Some(energybrain_core::units::Kw::new(1.5)));
+    let bathroom = &state.zones[&energybrain_core::ids::ZoneId::new("bathroom").unwrap()];
+    assert_eq!(bathroom.base, Some(Celsius::new(26.5)));
+    assert_eq!(
+        bathroom.last_write.map(|(v, _)| v),
+        Some(Celsius::new(26.5))
+    );
+    assert_eq!(
+        bathroom.heating_kw,
+        Some(energybrain_core::units::Kw::new(1.5))
+    );
 }
 
 /// A store that can fail on demand.

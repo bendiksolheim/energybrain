@@ -293,7 +293,10 @@ pub(crate) mod tests {
         TopicConfig {
             meter: "tibber".to_owned(),
             prefix: "energybrain".to_owned(),
-            zones: vec![zone("bad", "Bad/Gulv_bad"), zone("gang", "Gang/Gulv_gang")],
+            zones: vec![
+                zone("bathroom", "Bathroom/Floor_bathroom"),
+                zone("hallway", "Hallway/Floor_hallway"),
+            ],
         }
     }
 
@@ -324,16 +327,16 @@ pub(crate) mod tests {
         translator().decode(topic, payload, ts(NOW))
     }
 
-    fn bad() -> ZoneId {
-        ZoneId::new("bad").unwrap()
+    fn bathroom() -> ZoneId {
+        ZoneId::new("bathroom").unwrap()
     }
 
     #[test]
     fn subscribes_to_meter_zones_and_controls() {
         let subs = translator().subscriptions();
         assert_eq!(subs[0], "tibber");
-        assert!(subs.contains(&"zwave/Bad/Gulv_bad/67/1/setpoint/1".to_owned()));
-        assert!(subs.contains(&"zwave/Gang/Gulv_gang/50/1/value/65537".to_owned()));
+        assert!(subs.contains(&"zwave/Bathroom/Floor_bathroom/67/1/setpoint/1".to_owned()));
+        assert!(subs.contains(&"zwave/Hallway/Floor_hallway/50/1/value/65537".to_owned()));
         assert_eq!(
             &subs[subs.len() - 3..],
             [
@@ -420,38 +423,38 @@ pub(crate) mod tests {
     #[test]
     fn thermostat_values_are_plain_numbers() {
         assert_eq!(
-            decode("zwave/Bad/Gulv_bad/67/1/setpoint/1", b"26.5"),
+            decode("zwave/Bathroom/Floor_bathroom/67/1/setpoint/1", b"26.5"),
             Decoded::Inputs(vec![Input::ThermostatSetpoint {
-                zone: bad(),
+                zone: bathroom(),
                 at: ts(NOW),
                 value: Celsius::new(26.5),
             }])
         );
         assert_eq!(
-            decode("zwave/Bad/Gulv_bad/50/1/value/66049", b" 1500\n"),
+            decode("zwave/Bathroom/Floor_bathroom/50/1/value/66049", b" 1500\n"),
             Decoded::Inputs(vec![Input::ZonePower {
-                zone: bad(),
+                zone: bathroom(),
                 at: ts(NOW),
                 power: Kw::new(1.5),
             }])
         );
         assert_eq!(
-            decode("zwave/Bad/Gulv_bad/50/1/value/65537", b"9558.2"),
+            decode("zwave/Bathroom/Floor_bathroom/50/1/value/65537", b"9558.2"),
             Decoded::Inputs(vec![Input::ZoneEnergy {
-                zone: bad(),
+                zone: bathroom(),
                 at: ts(NOW),
                 total: Kwh::new(9558.2),
             }])
         );
         assert_eq!(
-            decode("zwave/Bad/Gulv_bad/67/1/setpoint/1", b"NaN"),
+            decode("zwave/Bathroom/Floor_bathroom/67/1/setpoint/1", b"NaN"),
             Decoded::Invalid {
-                topic: "zwave/Bad/Gulv_bad/67/1/setpoint/1".to_owned(),
+                topic: "zwave/Bathroom/Floor_bathroom/67/1/setpoint/1".to_owned(),
                 reason: "not a number: \"NaN\"".to_owned(),
             }
         );
         assert_eq!(
-            decode("zwave/Stue/Kontakt_tak/50/0/value/66050", b"1"),
+            decode("zwave/Living/Ceiling_light/50/0/value/66050", b"1"),
             Decoded::Ignored
         );
     }
@@ -475,16 +478,16 @@ pub(crate) mod tests {
             mode(Mode::Observe)
         );
         assert_eq!(
-            decode("energybrain/zone/bad/shed_allowed/set", b"off"),
+            decode("energybrain/zone/bathroom/shed_allowed/set", b"off"),
             Decoded::Inputs(vec![Input::SetShedAllowed {
-                zone: bad(),
+                zone: bathroom(),
                 allowed: false,
             }])
         );
         assert_eq!(
-            decode("energybrain/zone/gang/shed_allowed/set", b"ON"),
+            decode("energybrain/zone/hallway/shed_allowed/set", b"ON"),
             Decoded::Inputs(vec![Input::SetShedAllowed {
-                zone: ZoneId::new("gang").unwrap(),
+                zone: ZoneId::new("hallway").unwrap(),
                 allowed: true,
             }])
         );
@@ -546,8 +549,8 @@ pub(crate) mod tests {
                 price: Kr::new(131.0),
             },
             zones: vec![ZoneStatus {
-                id: bad(),
-                name: "Bad".to_owned(),
+                id: bathroom(),
+                name: "Bathroom".to_owned(),
                 base: None,
                 reported: None,
                 decision: None,
@@ -577,14 +580,14 @@ pub(crate) mod tests {
             reasons: vec![],
         };
         assert_eq!(
-            t.encode(&write(bad(), 22.5)),
+            t.encode(&write(bathroom(), 22.5)),
             [Publish {
-                topic: "zwave/Bad/Gulv_bad/67/1/setpoint/1/set".to_owned(),
+                topic: "zwave/Bathroom/Floor_bathroom/67/1/setpoint/1/set".to_owned(),
                 payload: "22.5".to_owned(),
                 retain: false,
             }]
         );
-        assert_eq!(t.encode(&write(bad(), 18.0))[0].payload, "18");
+        assert_eq!(t.encode(&write(bathroom(), 18.0))[0].payload, "18");
         assert_eq!(
             t.encode(&write(ZoneId::new("ghost").unwrap(), 18.0)),
             Vec::<Publish>::new()
@@ -606,8 +609,8 @@ pub(crate) mod tests {
                 ("energybrain/mode", "active"),
                 ("energybrain/active", "1"),
                 ("energybrain/peakguard/active", "1"),
-                ("energybrain/zone/bad/shed", "1"),
-                ("energybrain/zone/bad/shed_allowed", "1"),
+                ("energybrain/zone/bathroom/shed", "1"),
+                ("energybrain/zone/bathroom/shed_allowed", "1"),
             ]
         );
         let json = &first.last().unwrap();
@@ -635,7 +638,7 @@ pub(crate) mod tests {
                 ("energybrain/mode", "observe"),
                 ("energybrain/active", "0"),
                 ("energybrain/peakguard/active", "0"),
-                ("energybrain/zone/bad/shed", "0"),
+                ("energybrain/zone/bathroom/shed", "0"),
             ]
         );
         // After a reconnect everything retained is sent again.
@@ -673,7 +676,7 @@ pub(crate) mod tests {
         let hour = HourStart::containing(ts(NOW));
         let outputs = [
             Output::WouldWrite {
-                zone: bad(),
+                zone: bathroom(),
                 value: Celsius::new(1.0),
                 reasons: vec![],
             },
@@ -683,36 +686,36 @@ pub(crate) mod tests {
                 quality: Quality::Measured,
             }),
             Output::PersistZoneWrite {
-                zone: bad(),
+                zone: bathroom(),
                 value: Celsius::new(1.0),
                 at: ts(NOW),
             },
             Output::PersistZoneBase {
-                zone: bad(),
+                zone: bathroom(),
                 value: Celsius::new(1.0),
             },
             Output::PersistOverride {
-                zone: bad(),
+                zone: bathroom(),
                 manual: None,
             },
             Output::PersistZoneHour {
-                zone: bad(),
+                zone: bathroom(),
                 hour,
                 kwh: Kwh::ZERO,
             },
             Output::PersistZoneStats {
-                zone: bad(),
+                zone: bathroom(),
                 heating_kw: Kw::ZERO,
             },
             Output::PersistMode(Mode::Off),
             Output::PersistShedAllowed {
-                zone: bad(),
+                zone: bathroom(),
                 allowed: true,
             },
             Output::PersistEvent(Event {
                 at: ts(NOW),
                 mode: Mode::Off,
-                kind: EventKind::OverrideExpired { zone: bad() },
+                kind: EventKind::OverrideExpired { zone: bathroom() },
             }),
         ];
         for o in &outputs {

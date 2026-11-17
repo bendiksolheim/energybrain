@@ -765,42 +765,42 @@ mod tests {
             e("2026-11-15T17:00:00Z", 4.2, Quality::Measured),
             e("2026-11-15T18:00:00Z", 2.0, Quality::Interpolated),
             Output::PersistZoneBase {
-                zone: zone("bad"),
+                zone: zone("bathroom"),
                 value: Celsius::new(26.5),
             },
             Output::PersistZoneWrite {
-                zone: zone("bad"),
+                zone: zone("bathroom"),
                 value: Celsius::new(22.5),
                 at: ts("2026-11-15T17:20:00Z"),
             },
             Output::PersistZoneStats {
-                zone: zone("bad"),
+                zone: zone("bathroom"),
                 heating_kw: Kw::new(1.45),
             },
             Output::PersistShedAllowed {
-                zone: zone("utleie_1"),
+                zone: zone("guest_1"),
                 allowed: false,
             },
             Output::PersistOverride {
-                zone: zone("gang"),
+                zone: zone("hallway"),
                 manual: Some(Override {
                     value: Celsius::new(24.0),
                     until: ts("2026-11-15T19:00:00Z"),
                 }),
             },
             Output::PersistOverride {
-                zone: zone("kjeller"),
+                zone: zone("basement"),
                 manual: Some(Override {
                     value: Celsius::new(18.0),
                     until: ts("2026-11-15T19:00:00Z"),
                 }),
             },
             Output::PersistOverride {
-                zone: zone("kjeller"),
+                zone: zone("basement"),
                 manual: None,
             },
             Output::PersistZoneHour {
-                zone: zone("bad"),
+                zone: zone("bathroom"),
                 hour: hour("2026-11-15T17:00:00Z"),
                 kwh: Kwh::new(1.2),
             },
@@ -815,7 +815,7 @@ mod tests {
                 "2026-11-15T17:20:00Z",
                 EventKind::Guard {
                     event: GuardEvent::Shed {
-                        zone: zone("bad"),
+                        zone: zone("bathroom"),
                         load: Kw::new(1.5),
                         projected: Kwh::new(5.2),
                         limit: Kwh::new(4.7),
@@ -826,7 +826,7 @@ mod tests {
                 "2026-11-15T17:40:00Z",
                 EventKind::Guard {
                     event: GuardEvent::Release {
-                        zone: zone("bad"),
+                        zone: zone("bathroom"),
                         reason: ReleaseReason::BelowLimit,
                     },
                 },
@@ -844,14 +844,16 @@ mod tests {
             event(
                 "2026-11-15T17:42:00Z",
                 EventKind::Override {
-                    zone: zone("gang"),
+                    zone: zone("hallway"),
                     value: Celsius::new(24.0),
                     until: ts("2026-11-15T19:00:00Z"),
                 },
             ),
             event(
                 "2026-11-15T17:43:00Z",
-                EventKind::OverrideExpired { zone: zone("gang") },
+                EventKind::OverrideExpired {
+                    zone: zone("hallway"),
+                },
             ),
             event(
                 "2026-11-15T17:44:00Z",
@@ -869,12 +871,12 @@ mod tests {
         all.extend(event_outputs());
         all.extend([
             Output::WriteSetpoint {
-                zone: zone("bad"),
+                zone: zone("bathroom"),
                 value: Celsius::new(22.5),
                 reasons: vec![],
             },
             Output::WouldWrite {
-                zone: zone("bad"),
+                zone: zone("bathroom"),
                 value: Celsius::new(22.5),
                 reasons: vec![],
             },
@@ -906,7 +908,7 @@ mod tests {
             2,
             "the October hour is outside the window"
         );
-        assert_eq!(loaded.zones[&zone("kjeller")].manual, None);
+        assert_eq!(loaded.zones[&zone("basement")].manual, None);
     }
 
     #[test]
@@ -939,11 +941,11 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                "shed:bad",
-                "release:bad",
+                "shed:bathroom",
+                "release:bathroom",
                 "limit_unreachable:-",
-                "override:gang",
-                "override_expired:gang",
+                "override:hallway",
+                "override_expired:hallway",
                 "mode_changed:-"
             ]
         );
@@ -957,7 +959,11 @@ mod tests {
         s.apply(&outputs()).unwrap();
         assert_eq!(
             s.zone_hours(ts(SINCE), ts("2026-11-16T00:00:00Z")).unwrap(),
-            [(zone("bad"), hour("2026-11-15T17:00:00Z"), Kwh::new(1.2))]
+            [(
+                zone("bathroom"),
+                hour("2026-11-15T17:00:00Z"),
+                Kwh::new(1.2)
+            )]
         );
         assert_eq!(
             s.zone_hours(ts(SINCE), ts("2026-11-15T17:00:00Z")).unwrap(),
@@ -1012,9 +1018,9 @@ mod tests {
                     shed: true,
                     override_until: Some(at),
                     power: Some(Kw::new(1.4)),
-                    ..z("bad", "Bad")
+                    ..z("bathroom", "Bathroom")
                 },
-                z("kjeller", "Kjeller"),
+                z("basement", "Basement"),
             ],
         }
     }
@@ -1051,7 +1057,11 @@ mod tests {
         );
         let samples = s.samples(Timestamp::MIN, Timestamp::MAX).unwrap();
         assert_eq!(samples, [Sample::of(&first), Sample::of(&later)]);
-        assert_eq!(samples[1].zones[0].id, zone("kjeller"), "status order kept");
+        assert_eq!(
+            samples[1].zones[0].id,
+            zone("basement"),
+            "status order kept"
+        );
         let range = s
             .samples(ts("2026-11-15T17:21:00Z"), ts("2026-11-15T17:22:00Z"))
             .unwrap();
@@ -1205,13 +1215,13 @@ mod tests {
             corrupt("INSERT INTO zones (zone) VALUES ('Bad Zone')")
                 .starts_with("corrupt store: zone id")
         );
-        assert!(corrupt("INSERT INTO zones (zone, last_write, last_write_at) VALUES ('bad', 1, 9223372036854775807)")
+        assert!(corrupt("INSERT INTO zones (zone, last_write, last_write_at) VALUES ('bathroom', 1, 9223372036854775807)")
             .starts_with("corrupt store: timestamp"));
         assert!(
             corrupt("INSERT INTO hourly_energy VALUES (9223372036854775807, 1.0, 'measured')")
                 .starts_with("corrupt store: timestamp")
         );
-        assert!(corrupt("INSERT INTO zones (zone, override_value, override_until) VALUES ('bad', 1, 9223372036854775807)")
+        assert!(corrupt("INSERT INTO zones (zone, override_value, override_until) VALUES ('bathroom', 1, 9223372036854775807)")
             .starts_with("corrupt store: timestamp"));
         assert!(
             corrupt("INSERT INTO hourly_energy VALUES (1794848400, 'x', 'measured')")
@@ -1264,13 +1274,13 @@ mod tests {
         .starts_with("corrupt store: zone id"));
         assert_eq!(
             corrupt_sample(&format!(
-                "{} INSERT INTO zone_samples VALUES (1794848460, 'bad', 0, NULL, NULL, NULL, NULL, 0, 0)",
+                "{} INSERT INTO zone_samples VALUES (1794848460, 'bathroom', 0, NULL, NULL, NULL, NULL, 0, 0)",
                 sample("observe", "idle")
             )),
             "corrupt store: zone sample at 1794848460 has no sample"
         );
         assert!(corrupt_sample(&format!(
-            "{} INSERT INTO zone_samples VALUES (1794848400, 'bad', 0, 'x', NULL, NULL, NULL, 0, 0)",
+            "{} INSERT INTO zone_samples VALUES (1794848400, 'bathroom', 0, 'x', NULL, NULL, NULL, 0, 0)",
             sample("observe", "idle")
         ))
         .starts_with("sqlite: "));

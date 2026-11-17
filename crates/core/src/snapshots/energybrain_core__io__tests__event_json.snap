@@ -11,7 +11,7 @@ expression: json(&events)
       "type": "guard",
       "event": {
         "type": "shed",
-        "zone": "bad",
+        "zone": "bathroom",
         "load": {
           "value": 1.5,
           "unit": "kW"
@@ -34,7 +34,7 @@ expression: json(&events)
       "type": "guard",
       "event": {
         "type": "release",
-        "zone": "bad",
+        "zone": "bathroom",
         "reason": "below_limit"
       }
     }
@@ -66,7 +66,7 @@ expression: json(&events)
     "mode": "active",
     "kind": {
       "type": "override",
-      "zone": "bad",
+      "zone": "bathroom",
       "setpoint": {
         "value": 27.0,
         "unit": "°C"
@@ -79,7 +79,7 @@ expression: json(&events)
     "mode": "active",
     "kind": {
       "type": "override_expired",
-      "zone": "bad"
+      "zone": "bathroom"
     }
   },
   {

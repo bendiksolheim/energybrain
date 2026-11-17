@@ -346,7 +346,7 @@ mod tests {
     use crate::zone::tests::ts;
 
     fn zone() -> ZoneId {
-        ZoneId::new("bad").unwrap()
+        ZoneId::new("bathroom").unwrap()
     }
 
     fn json<T: serde::Serialize>(v: &T) -> String {
@@ -386,7 +386,7 @@ mod tests {
             },
             zones: vec![ZoneStatus {
                 id: zone(),
-                name: "Bad".to_owned(),
+                name: "Bathroom".to_owned(),
                 base: Some(Celsius::new(26.5)),
                 reported: Some(Celsius::new(26.5)),
                 decision: Some(Celsius::new(22.5)),

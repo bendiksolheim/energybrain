@@ -151,8 +151,8 @@ expression: json(&view)
     },
     "zones": [
       {
-        "id": "bad",
-        "name": "Bad",
+        "id": "bathroom",
+        "name": "Bathroom",
         "energy": {
           "unit": "kWh",
           "values": [
@@ -184,8 +184,8 @@ expression: json(&view)
         }
       },
       {
-        "id": "kjeller",
-        "name": "Kjeller",
+        "id": "basement",
+        "name": "Basement",
         "energy": {
           "unit": "kWh",
           "values": [
@@ -302,8 +302,8 @@ expression: json(&view)
     },
     "zones": [
       {
-        "id": "bad",
-        "name": "Bad",
+        "id": "bathroom",
+        "name": "Bathroom",
         "base": {
           "unit": "°C",
           "values": [
@@ -360,8 +360,8 @@ expression: json(&view)
         ]
       },
       {
-        "id": "kjeller",
-        "name": "Kjeller",
+        "id": "basement",
+        "name": "Basement",
         "base": {
           "unit": "°C",
           "values": [

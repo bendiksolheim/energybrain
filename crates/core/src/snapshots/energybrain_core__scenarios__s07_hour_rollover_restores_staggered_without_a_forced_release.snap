@@ -2,11 +2,11 @@
 source: crates/core/src/scenarios.rs
 expression: sim.snapshot()
 ---
-11-15 17:40:30Z [active] shed bad (1.50 kW; projected 4.74 kWh > 4.70 kWh)
-11-15 17:40:30Z write bad 22.5 °C
-11-15 18:00:00Z [active] shed gang (1.00 kW; projected 5.34 kWh > 4.70 kWh)
-11-15 18:00:00Z write gang 18 °C
-11-15 18:05:00Z [active] release gang (BelowLimit)
-11-15 18:05:00Z write gang 22 °C
-11-15 18:07:00Z [active] release bad (BelowLimit)
-11-15 18:07:00Z write bad 26.5 °C
+11-15 17:40:30Z [active] shed bathroom (1.50 kW; projected 4.74 kWh > 4.70 kWh)
+11-15 17:40:30Z write bathroom 22.5 °C
+11-15 18:00:00Z [active] shed hallway (1.00 kW; projected 5.34 kWh > 4.70 kWh)
+11-15 18:00:00Z write hallway 18 °C
+11-15 18:05:00Z [active] release hallway (BelowLimit)
+11-15 18:05:00Z write hallway 22 °C
+11-15 18:07:00Z [active] release bathroom (BelowLimit)
+11-15 18:07:00Z write bathroom 26.5 °C

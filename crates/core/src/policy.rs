@@ -188,16 +188,16 @@ mod tests {
     use crate::zone::tests::{config, ts};
 
     fn zones() -> BTreeMap<ZoneId, Zone> {
-        let mut bad = Zone::new(config("bad", 1));
-        bad.base = Some(Celsius::new(26.5));
-        let mut gang = Zone::new(config("gang", 3));
-        gang.base = Some(Celsius::new(22.0));
-        gang.manual = Some(Override {
+        let mut bathroom = Zone::new(config("bathroom", 1));
+        bathroom.base = Some(Celsius::new(26.5));
+        let mut hallway = Zone::new(config("hallway", 3));
+        hallway.base = Some(Celsius::new(22.0));
+        hallway.manual = Some(Override {
             value: Celsius::new(24.0),
             until: ts("2026-11-15T19:00:00Z"),
         });
-        let kjeller = Zone::new(config("kjeller", 6));
-        [bad, gang, kjeller]
+        let basement = Zone::new(config("basement", 6));
+        [bathroom, hallway, basement]
             .into_iter()
             .map(|z| (z.id().clone(), z))
             .collect()
@@ -241,7 +241,7 @@ mod tests {
     fn caps_for_shed_zones_with_a_base() {
         let zones = zones();
         let guard = GuardState {
-            shed: vec![shed("bad"), shed("kjeller"), shed("gone")],
+            shed: vec![shed("bathroom"), shed("basement"), shed("gone")],
             ..GuardState::default()
         };
         let ctx = Context {
@@ -250,7 +250,7 @@ mod tests {
             guard: &guard,
         };
         let p = PeakGuardCaps.propose(&ctx);
-        assert_eq!(p.len(), 1, "kjeller has no base, 'gone' is unknown");
+        assert_eq!(p.len(), 1, "basement has no base, 'gone' is unknown");
         assert_eq!(p[0].kind, ProposalKind::Cap(Celsius::new(22.5)));
         assert!(p[0].reason.detail.starts_with("shed to 22.5 °C: projected"));
     }

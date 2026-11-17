@@ -3,12 +3,12 @@ source: crates/core/src/scenarios.rs
 assertion_line: 650
 expression: sim.snapshot()
 ---
-11-15 17:10:10Z [active] shed bad (1.50 kW; projected 5.73 kWh > 4.70 kWh)
-11-15 17:10:10Z write bad 22.5 °C
-11-15 17:10:20Z [active] shed gang (1.00 kW; projected 5.84 kWh > 4.70 kWh)
-11-15 17:10:20Z [active] shed kjeller (0.80 kW; projected 5.84 kWh > 4.70 kWh)
-11-15 17:10:20Z write gang 18 °C
-11-15 17:10:20Z write kjeller 11 °C
+11-15 17:10:10Z [active] shed bathroom (1.50 kW; projected 5.73 kWh > 4.70 kWh)
+11-15 17:10:10Z write bathroom 22.5 °C
+11-15 17:10:20Z [active] shed hallway (1.00 kW; projected 5.84 kWh > 4.70 kWh)
+11-15 17:10:20Z [active] shed basement (0.80 kW; projected 5.84 kWh > 4.70 kWh)
+11-15 17:10:20Z write basement 11 °C
+11-15 17:10:20Z write hallway 18 °C
 11-15 17:10:30Z [active] limit unreachable (projected 5.46 kWh, limit 4.70 kWh, sheddable 0.00 kWh)
-11-15 18:00:00Z [active] release kjeller (BelowLimit)
-11-15 18:00:00Z write kjeller 15 °C
+11-15 18:00:00Z [active] release basement (BelowLimit)
+11-15 18:00:00Z write basement 15 °C

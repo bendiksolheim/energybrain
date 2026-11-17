@@ -105,7 +105,7 @@ mod tests {
     use super::*;
     use crate::config::tests::{MINIMAL, eb};
 
-    const BAD_SETPOINT: &str = "zwave/Bad/Gulv_bad/67/1/setpoint/1";
+    const BATHROOM_SETPOINT: &str = "zwave/Bathroom/Floor_bathroom/67/1/setpoint/1";
 
     fn free_port() -> u16 {
         TcpListener::bind("127.0.0.1:0")
@@ -229,14 +229,14 @@ mod tests {
         let (stop, task) = start(port);
 
         // The thermostats' startup values, then live meter frames.
-        expect(&mut seen, BAD_SETPOINT, |p| p == b"22").await;
+        expect(&mut seen, BATHROOM_SETPOINT, |p| p == b"22").await;
         expect(&mut seen, "tibber", |p| p.first() == Some(&0x7e)).await;
         // A setpoint write is echoed.
         observer
-            .publish(&text(&format!("{BAD_SETPOINT}/set"), "21"))
+            .publish(&text(&format!("{BATHROOM_SETPOINT}/set"), "21"))
             .await
             .unwrap();
-        expect(&mut seen, BAD_SETPOINT, |p| p == b"21").await;
+        expect(&mut seen, BATHROOM_SETPOINT, |p| p == b"21").await;
         // A bad control is logged and survived; a good one takes effect.
         observer.publish(&text("sim/ev/set", "fast")).await.unwrap();
         observer.publish(&text("sim/ev/set", "7.4")).await.unwrap();

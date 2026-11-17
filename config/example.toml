@@ -13,7 +13,7 @@ timezone = "Europe/Oslo"
 [mqtt]
 # Host name or IP address of the MQTT broker that Z-Wave JS UI, the Tibber Pulse and
 # Homebridge also use. Plain TCP only; TLS is not supported.
-host = "192.168.1.172"
+host = "192.168.1.10"
 # Broker TCP port. 1883 is the standard unencrypted MQTT port.
 port = 1883
 # Client id this service connects with. It must be unique on the broker, or the broker will
@@ -23,7 +23,7 @@ client_id = "energybrain"
 # connection dead; values below 5 are raised to 5.
 keep_alive_secs = 30
 # Prefix of every topic this service publishes, or listens to for HomeKit (e.g. <prefix>/mode,
-# <prefix>/zone/bad/shed). Must not contain the MQTT wildcards + or #.
+# <prefix>/zone/bathroom/shed). Must not contain the MQTT wildcards + or #.
 # prefix = "energybrain"
 # Broker credentials. Prefer the environment variables ENERGYBRAIN_MQTT_USERNAME and
 # ENERGYBRAIN_MQTT_PASSWORD, which override these keys; never commit real values.
@@ -152,40 +152,40 @@ energy = "50/1/value/65537"
 
 # Large room with the biggest heater, so shedding it helps the most.
 [[zone]]
-id = "bad"
-name = "Bad"
-device = "zwave/Bad/Gulv_bad"
+id = "bathroom"
+name = "Bathroom"
+device = "zwave/Bathroom/Floor_bathroom"
 priority = 1
 
 # Laundry-room heating cable, measured at about 575 W.
 [[zone]]
-id = "vaskerom"
-name = "Vaskerom"
-device = "zwave/Vaskerom/Varmekabel"
+id = "laundry"
+name = "Laundry"
+device = "zwave/Laundry/Heating_cable"
 priority = 2
 nominal_kw = 0.6
 
 [[zone]]
-id = "gang"
-name = "Gang"
-device = "zwave/Gang/Gulv_gang"
+id = "hallway"
+name = "Hallway"
+device = "zwave/Hallway/Floor_hallway"
 priority = 3
 
 [[zone]]
-id = "utleie_1"
-name = "Utleie 1"
-device = "zwave/Utleie/Gulv_utleie_1"
+id = "guest_1"
+name = "Guest 1"
+device = "zwave/Guest/Floor_guest_1"
 priority = 4
 
 [[zone]]
-id = "utleie_2"
-name = "Utleie 2"
-device = "zwave/Utleie/Gulv_utleie_2"
+id = "guest_2"
+name = "Guest 2"
+device = "zwave/Guest/Floor_guest_2"
 priority = 5
 
 # Already kept at 15 °C, so shedding it gains little: last.
 [[zone]]
-id = "kjeller"
-name = "Kjeller"
-device = "zwave/Kjeller/Gulv_kjeller"
+id = "basement"
+name = "Basement"
+device = "zwave/Basement/Floor_basement"
 priority = 6

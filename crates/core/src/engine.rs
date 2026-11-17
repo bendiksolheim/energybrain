@@ -505,7 +505,7 @@ mod tests {
             guard: GuardConfig::default(),
             actuator: ActuatorConfig::default(),
             zone_settings: ZoneSettings::default(),
-            zones: vec![config("bad", 1), config("gang", 3)],
+            zones: vec![config("bathroom", 1), config("hallway", 3)],
         }
     }
 
@@ -545,47 +545,49 @@ mod tests {
         for out in [
             Output::PersistHour(e),
             Output::PersistZoneWrite {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 value: c(22.5),
                 at: ts(T0),
             },
             Output::PersistZoneBase {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 value: c(26.5),
             },
             Output::PersistOverride {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 manual: Some(o),
             },
             Output::PersistZoneStats {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 heating_kw: Kw::new(1.4),
             },
             Output::PersistMode(Mode::Active),
             Output::PersistShedAllowed {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 allowed: false,
             },
             // Not persisted state:
             Output::WriteSetpoint {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 value: c(1.0),
                 reasons: vec![],
             },
             Output::WouldWrite {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 value: c(1.0),
                 reasons: vec![],
             },
             Output::PersistZoneHour {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 hour,
                 kwh: Kwh::new(1.0),
             },
             Output::PersistEvent(Event {
                 at: ts(T0),
                 mode: Mode::Active,
-                kind: EventKind::OverrideExpired { zone: id("bad") },
+                kind: EventKind::OverrideExpired {
+                    zone: id("bathroom"),
+                },
             }),
         ] {
             p.apply(&out);
@@ -593,7 +595,7 @@ mod tests {
         assert_eq!(p.mode, Some(Mode::Active));
         assert_eq!(p.hours[&hour], e);
         assert_eq!(
-            p.zones[&id("bad")],
+            p.zones[&id("bathroom")],
             PersistedZone {
                 base: Some(c(26.5)),
                 last_write: Some((c(22.5), ts(T0))),
@@ -618,25 +620,25 @@ mod tests {
         let t = ts(T0);
         assert_eq!(
             e.handle(Input::ZonePower {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 at: t,
                 power: Kw::new(1.5),
             }),
             vec![Output::PersistZoneStats {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 heating_kw: Kw::new(1.5),
             }]
         );
         assert_eq!(
             e.handle(Input::ZonePower {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 at: t,
                 power: Kw::new(0.01),
             }),
             Vec::<Output>::new()
         );
         let energy = |at: &str, total: f64| Input::ZoneEnergy {
-            zone: id("bad"),
+            zone: id("bathroom"),
             at: ts(at),
             total: Kwh::new(total),
         };
@@ -647,18 +649,18 @@ mod tests {
         assert_eq!(
             e.handle(energy("2026-11-15T18:00:30Z", 101.5)),
             vec![Output::PersistZoneHour {
-                zone: id("bad"),
+                zone: id("bathroom"),
                 hour: HourStart::containing(t),
                 kwh: Kwh::new(1.5),
             }]
         );
         assert_eq!(
             e.handle(Input::SetShedAllowed {
-                zone: id("gang"),
+                zone: id("hallway"),
                 allowed: false,
             }),
             vec![Output::PersistShedAllowed {
-                zone: id("gang"),
+                zone: id("hallway"),
                 allowed: false,
             }]
         );
@@ -710,7 +712,7 @@ mod tests {
     fn entering_active_forgets_observe_mode_simulation() {
         let mut state = PersistedState::default();
         state.zones.insert(
-            id("bad"),
+            id("bathroom"),
             PersistedZone {
                 base: Some(c(26.5)),
                 ..PersistedZone::default()
@@ -719,24 +721,24 @@ mod tests {
         let mut e = engine(state);
         let t = ts(T0);
         e.handle(Input::ThermostatSetpoint {
-            zone: id("bad"),
+            zone: id("bathroom"),
             at: t,
             value: c(20.0),
         });
         // Observe: base is now 20 (a user change), would-write tracking is per zone.
-        e.zones.get_mut(&id("bad")).unwrap().last_would_write = Some((c(18.0), t));
+        e.zones.get_mut(&id("bathroom")).unwrap().last_would_write = Some((c(18.0), t));
         e.handle(Input::SetMode {
             at: t,
             mode: Mode::Active,
         });
-        assert_eq!(e.zones[&id("bad")].last_would_write, None);
+        assert_eq!(e.zones[&id("bathroom")].last_would_write, None);
     }
 
     #[test]
     fn expired_overrides_are_cleared_on_tick() {
         let mut state = PersistedState::default();
         state.zones.insert(
-            id("bad"),
+            id("bathroom"),
             PersistedZone {
                 base: Some(c(25.0)),
                 manual: Some(Override {
@@ -749,12 +751,12 @@ mod tests {
         let mut e = engine(state);
         let out = e.handle(Input::Tick { at: ts(T0) });
         assert!(out.contains(&Output::PersistOverride {
-            zone: id("bad"),
+            zone: id("bathroom"),
             manual: None,
         }));
         assert!(out.iter().any(|o| matches!(
             o,
-            Output::PersistEvent(Event { kind: EventKind::OverrideExpired { zone }, .. }) if *zone == id("bad")
+            Output::PersistEvent(Event { kind: EventKind::OverrideExpired { zone }, .. }) if *zone == id("bathroom")
         )));
     }
 
@@ -785,8 +787,8 @@ mod tests {
         let state = |mode| PersistedState {
             mode: Some(mode),
             zones: [
-                (id("bad"), shed_zone.clone()),
-                (id("gang"), at_base.clone()),
+                (id("bathroom"), shed_zone.clone()),
+                (id("hallway"), at_base.clone()),
             ]
             .into_iter()
             .collect(),
@@ -794,7 +796,7 @@ mod tests {
         };
         let active = engine(state(Mode::Active));
         assert_eq!(active.guard.shed.len(), 1);
-        assert_eq!(active.guard.shed[0].zone, id("bad"));
+        assert_eq!(active.guard.shed[0].zone, id("bathroom"));
         assert_eq!(active.guard.shed[0].since, ts(T0));
         let mut observe = engine(state(Mode::Observe));
         assert_eq!(observe.guard.shed, Vec::<Shed>::new());
@@ -807,7 +809,7 @@ mod tests {
         let mut active = engine(state(Mode::Active));
         let out = active.shutdown(ts(T0));
         assert!(out.contains(&Output::WriteSetpoint {
-            zone: id("bad"),
+            zone: id("bathroom"),
             value: c(26.5),
             reasons: vec![crate::policy::Reason {
                 policy: crate::policy::PolicyName::UserSetpointBase,
@@ -830,16 +832,16 @@ mod tests {
         });
         let t0 = ts(T0) + SignedDuration::from_mins(30);
         e.handle(Input::ThermostatSetpoint {
-            zone: id("bad"),
+            zone: id("bathroom"),
             at: t0,
             value: c(26.5),
         });
         e.handle(Input::ZonePower {
-            zone: id("bad"),
+            zone: id("bathroom"),
             at: t0,
             power: Kw::new(1.5),
         });
-        let is_write = |o: &Output, v: f64| matches!(o, Output::WriteSetpoint { zone, value, .. } if *zone == id("bad") && *value == c(v));
+        let is_write = |o: &Output, v: f64| matches!(o, Output::WriteSetpoint { zone, value, .. } if *zone == id("bathroom") && *value == c(v));
         let mut now = t0;
         while !e
             .handle(Input::Tick { at: now })

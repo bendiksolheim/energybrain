@@ -69,7 +69,7 @@ mod tests {
     fn rejects_empty_and_unsafe_ids() {
         assert_eq!(ZoneId::new(""), Err(IdError::Empty));
         assert_eq!(IdError::Empty.to_string(), "zone id must not be empty");
-        for bad in ["Bad", "a/b", "a+b", "a#", "bad rom", "bå"] {
+        for bad in ["Bathroom", "a/b", "a+b", "a#", "bath room", "bå"] {
             let err = ZoneId::new(bad).unwrap_err();
             assert_eq!(err, IdError::InvalidChar { id: bad.to_owned() });
         }

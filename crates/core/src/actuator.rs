@@ -100,7 +100,7 @@ mod tests {
     }
 
     fn zone(reported: Option<f64>) -> Zone {
-        let mut z = Zone::new(config("bad", 1));
+        let mut z = Zone::new(config("bathroom", 1));
         z.reported = reported.map(c);
         z
     }

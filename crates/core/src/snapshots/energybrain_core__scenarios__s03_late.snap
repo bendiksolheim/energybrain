@@ -2,7 +2,7 @@
 source: crates/core/src/scenarios.rs
 expression: late.snapshot()
 ---
-11-15 17:52:50Z [active] shed bad (1.50 kW; projected 4.72 kWh > 4.70 kWh)
-11-15 17:52:50Z write bad 22.5 °C
-11-15 18:00:00Z [active] release bad (BelowLimit)
-11-15 18:00:00Z write bad 26.5 °C
+11-15 17:52:50Z [active] shed bathroom (1.50 kW; projected 4.72 kWh > 4.70 kWh)
+11-15 17:52:50Z write bathroom 22.5 °C
+11-15 18:00:00Z [active] release bathroom (BelowLimit)
+11-15 18:00:00Z write bathroom 26.5 °C

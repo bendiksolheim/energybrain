@@ -54,7 +54,7 @@ mod tests {
 
     fn p(kind: ProposalKind) -> Proposal {
         Proposal {
-            zone: crate::ids::ZoneId::new("bad").unwrap(),
+            zone: crate::ids::ZoneId::new("bathroom").unwrap(),
             kind,
             reason: Reason {
                 policy: PolicyName::UserSetpointBase,
@@ -69,13 +69,13 @@ mod tests {
 
     #[test]
     fn no_base_no_decision() {
-        let cfg = config("bad", 1);
+        let cfg = config("bathroom", 1);
         assert_eq!(arbitrate(&cfg, &[p(ProposalKind::Cap(c(18.0)))]), None);
     }
 
     #[test]
     fn base_adjust_cap_override_clamp() {
-        let cfg = config("bad", 1);
+        let cfg = config("bathroom", 1);
         let d = arbitrate(&cfg, &[p(ProposalKind::Base(c(22.0)))]).unwrap();
         assert_eq!(d.value, c(22.0));
         assert_eq!(d.reasons.len(), 1);
@@ -133,7 +133,7 @@ mod tests {
     proptest! {
         #[test]
         fn decision_is_always_within_bounds(kinds in prop::collection::vec(kind(), 0..8)) {
-            let cfg = config("bad", 1);
+            let cfg = config("bathroom", 1);
             let proposals: Vec<_> = kinds.into_iter().map(p).collect();
             if let Some(d) = arbitrate(&cfg, &proposals) {
                 prop_assert!(d.value >= cfg.min_setpoint && d.value <= cfg.max_setpoint);

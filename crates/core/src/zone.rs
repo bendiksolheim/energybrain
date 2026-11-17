@@ -249,8 +249,8 @@ pub(crate) mod tests {
     #[test]
     fn first_report_is_the_base() {
         let s = ZoneSettings::default();
-        let mut z = Zone::new(config("bad", 1));
-        assert_eq!(z.id().as_str(), "bad");
+        let mut z = Zone::new(config("bathroom", 1));
+        assert_eq!(z.id().as_str(), "bathroom");
         let t = ts("2026-11-15T17:00:00Z");
         assert_eq!(
             z.on_setpoint(t, c(26.5), None, &s),
@@ -264,7 +264,7 @@ pub(crate) mod tests {
     #[test]
     fn echoes_never_change_the_base_however_late() {
         let s = ZoneSettings::default();
-        let mut z = Zone::new(config("bad", 1));
+        let mut z = Zone::new(config("bathroom", 1));
         z.base = Some(c(26.5));
         z.last_write = Some((c(22.5), ts("2026-11-15T17:00:00Z")));
         z.awaiting_echo = true;
@@ -279,7 +279,7 @@ pub(crate) mod tests {
     #[test]
     fn raising_above_the_cap_while_shed_is_an_override() {
         let s = ZoneSettings::default();
-        let mut z = Zone::new(config("bad", 1));
+        let mut z = Zone::new(config("bathroom", 1));
         z.base = Some(c(26.5));
         z.last_write = Some((c(22.5), ts("2026-11-15T17:00:00Z")));
         z.last_would_write = Some((c(22.5), ts("2026-11-15T17:00:00Z")));
@@ -305,7 +305,7 @@ pub(crate) mod tests {
     #[test]
     fn lowering_while_shed_just_moves_the_base() {
         let s = ZoneSettings::default();
-        let mut z = Zone::new(config("bad", 1));
+        let mut z = Zone::new(config("bathroom", 1));
         z.base = Some(c(26.5));
         z.last_write = Some((c(22.5), ts("2026-11-15T17:00:00Z")));
         let r = z.on_setpoint(ts("2026-11-15T17:10:00Z"), c(21.0), Some(c(22.5)), &s);
@@ -316,7 +316,7 @@ pub(crate) mod tests {
 
     #[test]
     fn cap_is_clamped_to_min_setpoint() {
-        let mut z = Zone::new(config("kjeller", 6));
+        let mut z = Zone::new(config("basement", 6));
         z.base = Some(c(7.0));
         assert_eq!(z.shed_cap(), Some(c(5.0)));
         z.base = None;
@@ -326,7 +326,7 @@ pub(crate) mod tests {
     #[test]
     fn shed_permission() {
         let t = ts("2026-11-15T17:00:00Z");
-        let mut z = Zone::new(config("utleie_1", 4));
+        let mut z = Zone::new(config("guest_1", 4));
         assert!(!z.sheddable(t), "no base yet");
         z.base = Some(c(18.0));
         assert!(z.sheddable(t));
@@ -341,7 +341,7 @@ pub(crate) mod tests {
     #[test]
     fn load_estimate_prefers_measurement_then_learning_then_nominal() {
         let s = ZoneSettings::default();
-        let mut z = Zone::new(config("bad", 1));
+        let mut z = Zone::new(config("bathroom", 1));
         assert_eq!(z.load(), Kw::new(1.0));
         z.heating_kw = Some(Kw::new(1.8));
         assert_eq!(z.load(), Kw::new(1.8));
@@ -354,7 +354,7 @@ pub(crate) mod tests {
     #[test]
     fn learns_heating_power_while_heating() {
         let s = ZoneSettings::default();
-        let mut z = Zone::new(config("vaskerom", 2));
+        let mut z = Zone::new(config("laundry", 2));
         let t = ts("2026-11-15T17:00:00Z");
         assert_eq!(
             z.on_power(t, Kw::new(0.03), &s),
@@ -370,7 +370,7 @@ pub(crate) mod tests {
 
     #[test]
     fn hourly_energy_from_the_thermostat_counter() {
-        let mut z = Zone::new(config("bad", 1));
+        let mut z = Zone::new(config("bathroom", 1));
         assert_eq!(
             z.on_energy(ts("2026-11-15T17:00:30Z"), Kwh::new(100.0)),
             None

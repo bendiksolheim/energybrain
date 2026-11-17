@@ -517,8 +517,8 @@ pub(crate) mod tests {
             .unwrap(),
             target: Kw::new(5.0),
             zones: vec![
-                (id("bad"), "Bad".to_owned()),
-                (id("kjeller"), "Kjeller".to_owned()),
+                (id("bathroom"), "Bathroom".to_owned()),
+                (id("basement"), "Basement".to_owned()),
             ],
         }
     }
@@ -547,7 +547,7 @@ pub(crate) mod tests {
             limit: Kwh::new(4.7),
             zones: vec![
                 ZoneSample {
-                    id: id("bad"),
+                    id: id("bathroom"),
                     base: Some(Celsius::new(26.5)),
                     reported: Some(Celsius::new(if shed { 22.5 } else { 26.5 })),
                     decision: Some(Celsius::new(if shed { 22.5 } else { 26.5 })),
@@ -585,7 +585,7 @@ pub(crate) mod tests {
             ],
             zone_hours: vec![
                 (
-                    id("bad"),
+                    id("bathroom"),
                     HourStart::containing(ts("2026-11-15T16:00:00Z")),
                     Kwh::new(1.1),
                 ),
@@ -734,14 +734,14 @@ pub(crate) mod tests {
     #[test]
     fn floors_add_up_the_configured_zones_that_reported() {
         let mut s = sample("2026-11-15T17:00:00Z", 1.0, false);
-        let mut kjeller = s.zones[0].clone();
-        kjeller.id = id("kjeller");
-        kjeller.power = Some(Kw::new(0.5));
-        s.zones.push(kjeller);
+        let mut basement = s.zones[0].clone();
+        basement.id = id("basement");
+        basement.power = Some(Kw::new(0.5));
+        s.zones.push(basement);
         assert_eq!(
             floors(&site(), &s),
             Some(1.9),
-            "bad 1.4 + kjeller 0.5, not the unknown zone"
+            "bathroom 1.4 + basement 0.5, not the unknown zone"
         );
         s.zones.iter_mut().for_each(|z| z.power = None);
         assert_eq!(floors(&site(), &s), None);

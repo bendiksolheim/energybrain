@@ -27,12 +27,12 @@ energybrain_mode{mode="off"} 0
 energybrain_mode{mode="observe"} 1
 energybrain_mode{mode="active"} 0
 # TYPE energybrain_zone_setpoint_celsius gauge
-energybrain_zone_setpoint_celsius{zone="bad",kind="base"} 26.5
-energybrain_zone_setpoint_celsius{zone="bad",kind="decision"} 22.5
-energybrain_zone_setpoint_celsius{zone="bad",kind="reported"} 26.5
+energybrain_zone_setpoint_celsius{zone="bathroom",kind="base"} 26.5
+energybrain_zone_setpoint_celsius{zone="bathroom",kind="decision"} 22.5
+energybrain_zone_setpoint_celsius{zone="bathroom",kind="reported"} 26.5
 # TYPE energybrain_zone_shed gauge
-energybrain_zone_shed{zone="bad"} 1
+energybrain_zone_shed{zone="bathroom"} 1
 # TYPE energybrain_zone_writes_total counter
-energybrain_zone_writes_total{zone="bad"} 1
+energybrain_zone_writes_total{zone="bathroom"} 1
 # TYPE energybrain_zone_would_write_total counter
-energybrain_zone_would_write_total{zone="bad"} 2
+energybrain_zone_would_write_total{zone="bathroom"} 2

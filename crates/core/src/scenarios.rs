@@ -77,15 +77,15 @@ impl Floor {
     }
 }
 
-/// The house: Bad, Gang and Kjeller need heat (3.3 kW); Vaskerom and the rental do not.
+/// The house: Bathroom, Hallway and Basement need heat (3.3 kW); Laundry and the guest unit do not.
 fn floors() -> Vec<Floor> {
     let spec = [
-        ("bad", 1, 1.5, 26.5, true),
-        ("vaskerom", 2, 0.6, 25.0, false),
-        ("gang", 3, 1.0, 22.0, true),
-        ("utleie_1", 4, 1.0, 18.0, false),
-        ("utleie_2", 5, 1.0, 18.0, false),
-        ("kjeller", 6, 0.8, 15.0, true),
+        ("bathroom", 1, 1.5, 26.5, true),
+        ("laundry", 2, 0.6, 25.0, false),
+        ("hallway", 3, 1.0, 22.0, true),
+        ("guest_1", 4, 1.0, 18.0, false),
+        ("guest_2", 5, 1.0, 18.0, false),
+        ("basement", 6, 0.8, 15.0, true),
     ];
     spec.iter()
         .map(|&(id, priority, load, wanted, needs_heat)| Floor {
@@ -386,19 +386,24 @@ fn spike(mode: Mode, from: i64, dur: i64, extra: f64) -> Sim {
 #[test]
 fn sim_thermostat_reports_power_only_when_its_relay_changes() {
     let mut sim = Sim::new("2026-11-15T17:00:00Z", Mode::Active);
-    let bad = ZoneId::new("bad").unwrap();
+    let bathroom = ZoneId::new("bathroom").unwrap();
     let reported = |sim: &mut Sim| {
         sim.run(mins(1));
         let status = sim.last_status();
-        status.zones.iter().find(|z| z.id == bad).unwrap().power
+        status
+            .zones
+            .iter()
+            .find(|z| z.id == bathroom)
+            .unwrap()
+            .power
     };
     // Load changes silently; a write that keeps the relay on reports nothing.
     sim.floors[0].load = 1.6;
-    sim.thermostat_write(&bad, 27.0);
+    sim.thermostat_write(&bathroom, 27.0);
     assert_eq!(reported(&mut sim), Some(Kw::new(1.5)));
-    sim.thermostat_write(&bad, 20.0);
+    sim.thermostat_write(&bathroom, 20.0);
     assert_eq!(reported(&mut sim), Some(Kw::new(0.01)));
-    sim.thermostat_write(&bad, 27.0);
+    sim.thermostat_write(&bathroom, 27.0);
     assert_eq!(reported(&mut sim), Some(Kw::new(1.6)));
 }
 
@@ -415,9 +420,9 @@ fn s01_quiet_hour_does_nothing() {
 fn s02_evening_spike_sheds_in_priority_order_and_restores_with_hysteresis() {
     let sim = spike(Mode::Active, 20, 25, 2.5);
     assert!(sim.sheds() >= 1);
-    // Bad (priority 1) goes first.
+    // Bathroom (priority 1) goes first.
     let first = sim.log.iter().find(|l| l.contains("] shed")).unwrap();
-    assert!(first.contains("shed bad"), "{first}");
+    assert!(first.contains("shed bathroom"), "{first}");
     // Everything is back at base by the end of the hour.
     for z in &sim.last_status().zones {
         assert_eq!(z.decision, z.base, "{}", z.id);
@@ -471,24 +476,24 @@ fn s06_user_raising_a_shed_zone_overrides_it_for_two_hours() {
     sim.run(mins(20));
     sim.background += 2.5;
     sim.run(mins(5));
-    let bad = ZoneId::new("bad").unwrap();
+    let bathroom = ZoneId::new("bathroom").unwrap();
     assert!(
         sim.last_status()
             .zones
             .iter()
-            .any(|z| z.id == bad && z.shed)
+            .any(|z| z.id == bathroom && z.shed)
     );
-    sim.user_sets("bad", 27.0);
+    sim.user_sets("bathroom", 27.0);
     sim.run(mins(30));
     let status = sim.last_status();
-    let z = status.zones.iter().find(|z| z.id == bad).unwrap();
+    let z = status.zones.iter().find(|z| z.id == bathroom).unwrap();
     assert!(!z.shed);
     assert_eq!(z.base, Some(Celsius::new(27.0)));
     assert_eq!(z.override_until, Some(ts("2026-11-15T19:25:00Z")));
-    // The load stays high; once the override expires, bad is sheddable again.
+    // The load stays high; once the override expires, bathroom is sheddable again.
     sim.run(mins(110));
     let status = sim.last_status();
-    let z = status.zones.iter().find(|z| z.id == bad).unwrap();
+    let z = status.zones.iter().find(|z| z.id == bathroom).unwrap();
     assert_eq!(z.override_until, None);
     assert!(z.shed, "sheddable again after the override");
     insta::assert_snapshot!(sim.snapshot());

@@ -199,8 +199,8 @@ pub(crate) mod tests {
                 price: Kr::new(233.0),
             },
             zones: vec![ZoneStatus {
-                id: ZoneId::new("bad").unwrap(),
-                name: "Bad".to_owned(),
+                id: ZoneId::new("bathroom").unwrap(),
+                name: "Bathroom".to_owned(),
                 base: Some(Celsius::new(26.5)),
                 reported: Some(Celsius::new(26.5)),
                 decision: Some(Celsius::new(22.5)),
@@ -214,20 +214,20 @@ pub(crate) mod tests {
         }
     }
 
-    fn bad() -> ZoneId {
-        ZoneId::new("bad").unwrap()
+    fn bathroom() -> ZoneId {
+        ZoneId::new("bathroom").unwrap()
     }
 
     #[test]
     fn renders_every_metric() {
         let mut m = Metrics::default();
         let write = Output::WriteSetpoint {
-            zone: bad(),
+            zone: bathroom(),
             value: Celsius::new(22.5),
             reasons: vec![],
         };
         let would = Output::WouldWrite {
-            zone: bad(),
+            zone: bathroom(),
             value: Celsius::new(22.5),
             reasons: vec![],
         };
@@ -268,36 +268,36 @@ pub(crate) mod tests {
                 quality: Quality::Measured,
             }),
             Output::PersistZoneWrite {
-                zone: bad(),
+                zone: bathroom(),
                 value: Celsius::new(1.0),
                 at: ts("2026-11-15T17:00:00Z"),
             },
             Output::PersistZoneBase {
-                zone: bad(),
+                zone: bathroom(),
                 value: Celsius::new(1.0),
             },
             Output::PersistOverride {
-                zone: bad(),
+                zone: bathroom(),
                 manual: None,
             },
             Output::PersistZoneHour {
-                zone: bad(),
+                zone: bathroom(),
                 hour,
                 kwh: Kwh::ZERO,
             },
             Output::PersistZoneStats {
-                zone: bad(),
+                zone: bathroom(),
                 heating_kw: Kw::ZERO,
             },
             Output::PersistMode(Mode::Off),
             Output::PersistShedAllowed {
-                zone: bad(),
+                zone: bathroom(),
                 allowed: true,
             },
             Output::PersistEvent(Event {
                 at: ts("2026-11-15T17:00:00Z"),
                 mode: Mode::Off,
-                kind: EventKind::OverrideExpired { zone: bad() },
+                kind: EventKind::OverrideExpired { zone: bathroom() },
             }),
         ];
         for o in &outputs {

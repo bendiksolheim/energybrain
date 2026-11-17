@@ -45,7 +45,7 @@ dev-down:
     -container stop energybrain-mqtt
     -container delete energybrain-mqtt
 
-# Change the simulated house live: `just sim ev 7.4`, `just sim meter pause`, `just sim zone/bad/setpoint 28`
+# Change the simulated house live: `just sim ev 7.4`, `just sim meter pause`, `just sim zone/bathroom/setpoint 28`
 sim control value:
     container exec energybrain-mqtt mosquitto_pub -t "sim/{{control}}/set" -m "{{value}}"
 

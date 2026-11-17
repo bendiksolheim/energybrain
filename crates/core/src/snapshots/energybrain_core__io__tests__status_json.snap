@@ -70,8 +70,8 @@ expression: json(&status)
   },
   "zones": [
     {
-      "id": "bad",
-      "name": "Bad",
+      "id": "bathroom",
+      "name": "Bathroom",
       "base": {
         "value": 26.5,
         "unit": "°C"

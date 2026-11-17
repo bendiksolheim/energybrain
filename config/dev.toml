@@ -63,38 +63,38 @@ power = "50/1/value/66049"
 energy = "50/1/value/65537"
 
 [[zone]]
-id = "bad"
-name = "Bad"
-device = "zwave/Bad/Gulv_bad"
+id = "bathroom"
+name = "Bathroom"
+device = "zwave/Bathroom/Floor_bathroom"
 priority = 1
 
 [[zone]]
-id = "vaskerom"
-name = "Vaskerom"
-device = "zwave/Vaskerom/Varmekabel"
+id = "laundry"
+name = "Laundry"
+device = "zwave/Laundry/Heating_cable"
 priority = 2
 nominal_kw = 0.6
 
 [[zone]]
-id = "gang"
-name = "Gang"
-device = "zwave/Gang/Gulv_gang"
+id = "hallway"
+name = "Hallway"
+device = "zwave/Hallway/Floor_hallway"
 priority = 3
 
 [[zone]]
-id = "utleie_1"
-name = "Utleie 1"
-device = "zwave/Utleie/Gulv_utleie_1"
+id = "guest_1"
+name = "Guest 1"
+device = "zwave/Guest/Floor_guest_1"
 priority = 4
 
 [[zone]]
-id = "utleie_2"
-name = "Utleie 2"
-device = "zwave/Utleie/Gulv_utleie_2"
+id = "guest_2"
+name = "Guest 2"
+device = "zwave/Guest/Floor_guest_2"
 priority = 5
 
 [[zone]]
-id = "kjeller"
-name = "Kjeller"
-device = "zwave/Kjeller/Gulv_kjeller"
+id = "basement"
+name = "Basement"
+device = "zwave/Basement/Floor_basement"
 priority = 6

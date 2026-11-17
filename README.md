@@ -116,9 +116,9 @@ docs don't include a complete `config.json` example.
   "valueContactDetected": "0"
 },
 {
-  "info": { "name": "Bad: kan kuttes", "type": "Switch" },
-  "topicGetOn": "energybrain/zone/bad/shed_allowed",
-  "topicSetOn": "energybrain/zone/bad/shed_allowed/set",
+  "info": { "name": "Bathroom: shed allowed", "type": "Switch" },
+  "topicGetOn": "energybrain/zone/bathroom/shed_allowed",
+  "topicSetOn": "energybrain/zone/bathroom/shed_allowed/set",
   "valueOn": "1",
   "valueOff": "0"
 }
@@ -188,7 +188,7 @@ What to look for:
 
 1. [ ] Two or more weeks in observe mode, with no `shed` you consider false.
 2. [ ] Check the would-shed events against real evenings (EV charging, cooking, sauna).
-3. [ ] Every zone's `shed_allowed` is how you want it (the rental units especially).
+3. [ ] Every zone's `shed_allowed` is how you want it (the guest units especially).
 4. [ ] `/healthz` stays 200, and the logs show no repeated MQTT disconnects or malformed
        messages.
 5. [ ] Turn on the **Energibrain aktiv** switch in HomeKit, or publish `active` to
