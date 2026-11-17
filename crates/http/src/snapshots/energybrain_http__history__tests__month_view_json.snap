@@ -1,0 +1,125 @@
+---
+source: crates/http/src/history.rs
+assertion_line: 719
+expression: json(&compact)
+---
+{
+  "month": "2026-10",
+  "today": "2026-10-25",
+  "time_zone": "Europe/Oslo",
+  "from": "2026-09-30T22:00:00Z",
+  "to": "2026-10-31T23:00:00Z",
+  "target": {
+    "value": 5.0,
+    "unit": "kW"
+  },
+  "top_days": [
+    {
+      "date": "2026-10-01",
+      "hour": "2026-10-01T16:00:00Z",
+      "energy": {
+        "value": 6.0,
+        "unit": "kWh"
+      }
+    },
+    {
+      "date": "2026-10-03",
+      "hour": "2026-10-03T16:00:00Z",
+      "energy": {
+        "value": 5.5,
+        "unit": "kWh"
+      }
+    },
+    {
+      "date": "2026-10-25",
+      "hour": "2026-10-25T16:00:00Z",
+      "energy": {
+        "value": 4.5,
+        "unit": "kWh"
+      }
+    }
+  ],
+  "top_average": {
+    "value": 5.333333333333333,
+    "unit": "kW"
+  },
+  "tier": {
+    "index": 2,
+    "from": {
+      "value": 5.0,
+      "unit": "kW"
+    },
+    "to": {
+      "value": 10.0,
+      "unit": "kW"
+    },
+    "price": {
+      "value": 397.0,
+      "unit": "kr"
+    }
+  },
+  "days": {
+    "date": [
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-03"
+    ],
+    "peak": {
+      "unit": "kWh",
+      "values": [
+        6.0,
+        1.0,
+        5.5
+      ]
+    },
+    "peak_hour": [
+      "2026-10-01T16:00:00Z",
+      "2026-10-02T16:00:00Z",
+      "2026-10-03T16:00:00Z"
+    ],
+    "top": [
+      true,
+      false,
+      true
+    ],
+    "energy": {
+      "unit": "kWh",
+      "values": [
+        6.0,
+        1.0,
+        5.5
+      ]
+    },
+    "by_hour": [
+      {
+        "unit": "kWh",
+        "values": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          6.0,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    ]
+  }
+}

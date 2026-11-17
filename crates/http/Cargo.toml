@@ -1,6 +1,6 @@
 [package]
 name = "energybrain-http"
-description = "HTTP: /healthz, /metrics, /api/state."
+description = "HTTP: /healthz, /metrics, /api/*, and the history page."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ energybrain-core = { version = "0.1.0", path = "../core" }
 jiff = "1.0.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["sync", "rt"] }
 
 [lints]

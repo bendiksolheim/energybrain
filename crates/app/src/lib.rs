@@ -13,7 +13,9 @@ use energybrain_config::Config;
 use energybrain_core::clock::Clock;
 use energybrain_core::engine::Engine;
 use energybrain_core::io::{Input, Output, Status};
-use energybrain_http::{AppState, EventQuery, Metrics, router};
+use energybrain_http::{
+    AppState, Detail, EventQuery, History, HistoryQuery, MAX_DAY_EVENTS, Metrics, Site, router,
+};
 use energybrain_mqtt::{Decoded, Link, Publisher, Translator, TransportEvent, connect};
 use energybrain_store::{SqliteStore, Store, StoreError};
 use jiff::{SignedDuration, Timestamp};
@@ -48,6 +50,52 @@ pub fn sqlite_events(path: PathBuf) -> EventQuery {
     })
 }
 
+/// The history behind `/api/day` and `/api/month`, from the `SQLite` file at `path` (one
+/// connection per query, like [`sqlite_events`]).
+pub fn sqlite_history(path: PathBuf) -> HistoryQuery {
+    Arc::new(move |from, to, detail| {
+        SqliteStore::open(&path)
+            .and_then(|s| read_history(&s, from, to, detail))
+            .map_err(|e| e.to_string())
+    })
+}
+
+fn read_history(
+    store: &SqliteStore,
+    from: Timestamp,
+    to: Timestamp,
+    detail: Detail,
+) -> Result<History, StoreError> {
+    let hours = store.hours(from, to)?;
+    Ok(match detail {
+        Detail::Hours => History {
+            hours,
+            ..History::default()
+        },
+        Detail::Full => History {
+            hours,
+            samples: store.samples(from, to)?,
+            zone_hours: store.zone_hours(from, to)?,
+            events: store.events_between(from, to, MAX_DAY_EVENTS)?,
+        },
+    })
+}
+
+/// What the history views need from the configuration.
+fn site(config: &Config) -> Site {
+    let e = &config.engine;
+    Site {
+        calendar: e.calendar.clone(),
+        tariff: e.tariff.clone(),
+        target: e.target,
+        zones: e
+            .zones
+            .iter()
+            .map(|z| (z.id.clone(), z.name.clone()))
+            .collect(),
+    }
+}
+
 /// Everything [`run`] needs.
 pub struct Runtime {
     /// Validated configuration.
@@ -58,6 +106,8 @@ pub struct Runtime {
     pub store: Box<dyn Store>,
     /// Stored-event lookup for HTTP.
     pub events: EventQuery,
+    /// History lookup for HTTP.
+    pub history: HistoryQuery,
     /// Bound HTTP listener.
     pub listener: TcpListener,
     /// Evaluation interval (10 s in production).
@@ -76,6 +126,7 @@ pub async fn run(rt: Runtime, shutdown: impl Future<Output = ()>) -> Result<(), 
         clock,
         store,
         events,
+        history,
         listener,
         tick,
         retry_delay,
@@ -98,6 +149,8 @@ pub async fn run(rt: Runtime, shutdown: impl Future<Output = ()>) -> Result<(), 
         clock: clock.clone(),
         metrics: metrics.clone(),
         events,
+        history,
+        site: Arc::new(site(&config)),
         max_status_age: SignedDuration::from_secs(30)
             .max(SignedDuration::try_from(tick * 3).unwrap_or_default()),
     });

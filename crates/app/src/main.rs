@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use energybrain::{Runtime, SystemClock, run, sqlite_events};
+use energybrain::{Runtime, SystemClock, run, sqlite_events, sqlite_history};
 use energybrain_store::SqliteStore;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing_subscriber::EnvFilter;
@@ -25,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store =
         SqliteStore::open(&config.store_path)?.with_sample_retention(config.sample_retention);
     let events = sqlite_events(config.store_path.clone());
+    let history = sqlite_history(config.store_path.clone());
     let listener = tokio::net::TcpListener::bind(config.http_listen).await?;
     let mut terminate = signal(SignalKind::terminate())?;
     let shutdown = async move {
@@ -39,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         clock: Arc::new(SystemClock),
         store: Box::new(store),
         events,
+        history,
         listener,
         tick: Duration::from_secs(10),
         retry_delay: Duration::from_secs(5),

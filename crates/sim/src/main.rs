@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use energybrain::{Runtime, SystemClock, run, sqlite_events};
+use energybrain::{Runtime, SystemClock, run, sqlite_events, sqlite_history};
 use energybrain_core::clock::{Clock, ScaledClock};
 use energybrain_core::io::Output;
 use energybrain_sim::{House, driver};
@@ -72,6 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let events = sqlite_events(config.store_path.clone());
+    let history = sqlite_history(config.store_path.clone());
     let listener = tokio::net::TcpListener::bind(config.http_listen).await?;
     let runtime = Runtime {
         tick: clock.real(Duration::from_secs(10)),
@@ -79,6 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         clock,
         store: Box::new(store),
         events,
+        history,
         listener,
         retry_delay: Duration::from_secs(5),
     };

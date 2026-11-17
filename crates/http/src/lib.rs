@@ -1,9 +1,11 @@
-//! HTTP: `/healthz`, `/metrics`, `/api/state` and `/api/events`.
+//! HTTP: `/healthz`, `/metrics`, `/api/state`, `/api/events`, and the history views
+//! `/api/day` and `/api/month`.
 //!
 //! The router only reads shared state that the runtime loop keeps up to date: the latest
 //! [`Status`] (a `watch` channel), whether MQTT is connected, the [`Metrics`] counters, and
-//! a function that queries stored events.
+//! functions that query the store.
 
+mod history;
 mod metrics;
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -23,6 +25,9 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::watch;
 
+pub use history::{
+    DayView, Detail, History, HistoryQuery, MAX_DAY_EVENTS, MonthView, Site, day_view, month_view,
+};
 pub use metrics::Metrics;
 
 /// Looks up stored events (JSON), newest first: `(since, limit)`.
@@ -45,6 +50,10 @@ pub struct AppState {
     pub metrics: Arc<Mutex<Metrics>>,
     /// Stored-event lookup (runs on a blocking thread).
     pub events: EventQuery,
+    /// History lookup for the day and month views (runs on a blocking thread).
+    pub history: HistoryQuery,
+    /// What the history views need to know about the installation.
+    pub site: Arc<Site>,
     /// A status older than this means the engine loop has stalled.
     pub max_status_age: SignedDuration,
 }
@@ -56,6 +65,8 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .route("/api/state", get(api_state))
         .route("/api/events", get(api_events))
+        .route("/api/day", get(api_day))
+        .route("/api/month", get(api_month))
         .with_state(state)
 }
 
@@ -147,16 +158,70 @@ async fn api_events(State(st): State<AppState>, Query(q): Query<EventsQuery>) ->
     };
     let limit = q.limit.unwrap_or(100).min(MAX_EVENTS);
     let query = st.events.clone();
-    let result = tokio::task::spawn_blocking(move || query(since, limit))
-        .await
-        .unwrap_or_else(|e| Err(e.to_string()));
-    match result {
+    match blocking(move || query(since, limit)).await {
         Ok(events) => Json(events).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e })),
-        )
-            .into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// Runs a store lookup on a blocking thread; a panic becomes an error message.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()))
+}
+
+fn error(code: StatusCode, message: impl Into<String>) -> Response {
+    (code, Json(json!({ "error": message.into() }))).into_response()
+}
+
+/// Query string of `/api/day`.
+#[derive(Debug, Deserialize)]
+struct DayQuery {
+    date: Option<String>,
+}
+
+async fn api_day(State(st): State<AppState>, Query(q): Query<DayQuery>) -> Response {
+    let site = st.site.clone();
+    let today = site.calendar.local_date(st.clock.now());
+    let date = match q.date.as_deref().map(history::parse_date).transpose() {
+        Ok(date) => date.unwrap_or(today),
+        Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
+    };
+    let (from, to) = match history::day_range(&site.calendar, date) {
+        Ok(range) => range,
+        Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
+    };
+    let query = st.history.clone();
+    match blocking(move || query(from, to, Detail::Full)).await {
+        Ok(h) => Json(day_view(&site, date, (from, to), today, h)).into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// Query string of `/api/month`.
+#[derive(Debug, Deserialize)]
+struct MonthQuery {
+    month: Option<String>,
+}
+
+async fn api_month(State(st): State<AppState>, Query(q): Query<MonthQuery>) -> Response {
+    let site = st.site.clone();
+    let today = site.calendar.local_date(st.clock.now());
+    let day = match q.month.as_deref().map(history::parse_month).transpose() {
+        Ok(day) => day.unwrap_or(today),
+        Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
+    };
+    let (from, to) = match history::month_range(&site.calendar, day) {
+        Ok(range) => range,
+        Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
+    };
+    let query = st.history.clone();
+    match blocking(move || query(from, to, Detail::Hours)).await {
+        Ok(h) => Json(month_view(&site, day, (from, to), today, &h)).into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
 
@@ -183,6 +248,10 @@ mod tests {
     }
 
     fn rig(events: EventQuery) -> Rig {
+        rig_with(events, Arc::new(|_, _, _| Ok(History::default())))
+    }
+
+    fn rig_with(events: EventQuery, history: HistoryQuery) -> Rig {
         let (status, status_rx) = watch::channel(None);
         let (mqtt, mqtt_rx) = watch::channel(false);
         let state = AppState {
@@ -191,6 +260,8 @@ mod tests {
             clock: Arc::new(SimClock::new(ts(NOW))),
             metrics: Arc::new(Mutex::new(Metrics::default())),
             events,
+            history,
+            site: Arc::new(history::tests::site()),
             max_status_age: SignedDuration::from_secs(30),
         };
         Rig {
@@ -275,6 +346,7 @@ mod tests {
             get(&r.state, "/api/events").await,
             (StatusCode::OK, "[]".to_owned())
         );
+        assert_eq!(get(&r.state, "/api/day").await.0, StatusCode::OK);
     }
 
     #[tokio::test]
@@ -348,5 +420,122 @@ mod tests {
         })
         .join();
         assert_eq!(get(&r.state, "/metrics").await.0, StatusCode::OK);
+    }
+
+    type Calls = Arc<Mutex<Vec<(Timestamp, Timestamp, Detail)>>>;
+
+    fn recording(history: History) -> (HistoryQuery, Calls) {
+        let calls: Calls = Arc::default();
+        let log = calls.clone();
+        let query: HistoryQuery = Arc::new(move |from, to, detail| {
+            log.lock().unwrap().push((from, to, detail));
+            Ok(history.clone())
+        });
+        (query, calls)
+    }
+
+    fn body(text: &str) -> serde_json::Value {
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[tokio::test]
+    async fn day_defaults_to_today_and_reads_the_whole_local_day() {
+        let (query, calls) = recording(history::tests::day_history());
+        let r = rig_with(no_events(), query);
+        let (code, text) = get(&r.state, "/api/day").await;
+        assert_eq!(code, StatusCode::OK);
+        let v = body(&text);
+        assert_eq!(v["date"], "2026-11-15");
+        assert_eq!(v["today"], "2026-11-15");
+        assert_eq!(v["time_zone"], "Europe/Oslo");
+        assert_eq!(v["samples"]["power"]["unit"], "kW");
+        let (code, text) = get(&r.state, "/api/day?date=2026-10-25").await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(body(&text)["hours"]["start"].as_array().unwrap().len(), 25);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                (
+                    ts("2026-11-14T23:00:00Z"),
+                    ts("2026-11-15T23:00:00Z"),
+                    Detail::Full
+                ),
+                (
+                    ts("2026-10-24T22:00:00Z"),
+                    ts("2026-10-25T23:00:00Z"),
+                    Detail::Full
+                )
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn month_defaults_to_this_month_and_reads_hours_only() {
+        let (query, calls) = recording(History::default());
+        let r = rig_with(no_events(), query);
+        let (code, text) = get(&r.state, "/api/month").await;
+        assert_eq!(code, StatusCode::OK);
+        let v = body(&text);
+        assert_eq!(v["month"], "2026-11");
+        assert_eq!(v["days"]["date"].as_array().unwrap().len(), 30);
+        assert_eq!(v["tier"]["index"], 0);
+        let (code, text) = get(&r.state, "/api/month?month=2026-02").await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(body(&text)["days"]["date"].as_array().unwrap().len(), 28);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                (
+                    ts("2026-10-31T23:00:00Z"),
+                    ts("2026-11-30T23:00:00Z"),
+                    Detail::Hours
+                ),
+                (
+                    ts("2026-01-31T23:00:00Z"),
+                    ts("2026-02-28T23:00:00Z"),
+                    Detail::Hours
+                )
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn bad_dates_are_rejected_before_reading_the_store() {
+        let (query, calls) = recording(History::default());
+        let r = rig_with(no_events(), query);
+        for uri in [
+            "/api/day?date=yesterday",
+            "/api/day?date=9999-12-31",
+            "/api/month?month=2026-13",
+            "/api/month?month=9999-12",
+        ] {
+            let (code, text) = get(&r.state, uri).await;
+            assert_eq!(code, StatusCode::BAD_REQUEST, "{uri}");
+            assert!(body(&text)["error"].is_string(), "{uri}: {text}");
+        }
+        assert_eq!(calls.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn history_lookup_failures_are_server_errors() {
+        let failing: HistoryQuery = Arc::new(|_, _, _| Err("disk full".to_owned()));
+        let r = rig_with(no_events(), failing);
+        for uri in ["/api/day", "/api/month"] {
+            assert_eq!(
+                get(&r.state, uri).await,
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    r#"{"error":"disk full"}"#.to_owned()
+                )
+            );
+        }
+        let panicking: HistoryQuery = Arc::new(|_, _, _| panic!("boom"));
+        let r = rig_with(no_events(), panicking);
+        // `blocking` is instantiated per handler, so each needs its panic path run.
+        for uri in ["/api/day", "/api/month"] {
+            let (code, text) = get(&r.state, uri).await;
+            assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(text.contains("panicked"), "{text}");
+        }
     }
 }

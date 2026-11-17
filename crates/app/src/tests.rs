@@ -93,6 +93,7 @@ async fn runtime(cfg: Config, store: Box<dyn Store>, events: EventQuery) -> (Run
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let rt = Runtime {
+        history: sqlite_history(cfg.store_path.clone()),
         config: cfg,
         clock: Arc::new(SimClock::new(ts(NOW))),
         store,
@@ -197,6 +198,61 @@ fn event_lookup_reports_store_errors() {
     assert!(query(None, 10).unwrap_err().starts_with("sqlite: "));
 }
 
+#[test]
+fn history_reads_what_each_view_needs() {
+    use energybrain_core::energy::{HourEnergy, Quality};
+    use energybrain_core::io::{Event, EventKind};
+    use energybrain_core::time::HourStart;
+    use energybrain_core::units::Kwh;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("h.db");
+    let hour = HourStart::containing(ts("2026-11-15T17:00:00Z"));
+    SqliteStore::open(&db)
+        .unwrap()
+        .apply(&[
+            Output::PersistHour(HourEnergy {
+                hour,
+                kwh: Kwh::new(4.2),
+                quality: Quality::Measured,
+            }),
+            Output::PersistZoneHour {
+                zone: energybrain_core::ids::ZoneId::new("bad").unwrap(),
+                hour,
+                kwh: Kwh::new(1.1),
+            },
+            Output::PersistEvent(Event {
+                at: ts("2026-11-15T17:20:00Z"),
+                mode: Mode::Observe,
+                kind: EventKind::ModeChanged {
+                    from: Mode::Observe,
+                    to: Mode::Active,
+                },
+            }),
+        ])
+        .unwrap();
+    let query = sqlite_history(db);
+    let (from, to) = (ts("2026-11-15T00:00:00Z"), ts("2026-11-16T00:00:00Z"));
+    let full = query(from, to, Detail::Full).unwrap();
+    assert_eq!(
+        (full.hours.len(), full.zone_hours.len(), full.events.len()),
+        (1, 1, 1)
+    );
+    assert_eq!(
+        query(from, to, Detail::Hours).unwrap(),
+        History {
+            hours: full.hours,
+            ..History::default()
+        }
+    );
+    let broken = sqlite_history(dir.path().to_owned());
+    assert!(
+        broken(from, to, Detail::Hours)
+            .unwrap_err()
+            .starts_with("sqlite: ")
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn end_to_end_shed_report_and_restore_on_shutdown() {
     let mqtt_port = broker();
@@ -240,6 +296,15 @@ async fn end_to_end_shed_report_and_restore_on_shutdown() {
     assert!(health.starts_with("HTTP/1.1 200"), "{health}");
     let events = http_get(http_port, "/api/events").await;
     assert!(events.contains(r#""type":"shed""#), "{events}");
+    // The clock stands still, so the sample log holds the first status only.
+    let day = http_get(http_port, "/api/day").await;
+    assert!(day.starts_with("HTTP/1.1 200"), "{day}");
+    assert!(
+        day.contains(r#""at":["2026-11-15T17:30:00Z"],"mode":["observe"]"#),
+        "{day}"
+    );
+    let month = http_get(http_port, "/api/month").await;
+    assert!(month.contains(r#""month":"2026-11""#), "{month}");
     let metrics = http_get(http_port, "/metrics").await;
     assert!(
         metrics.contains("energybrain_zone_writes_total{zone=\"bad\"} 1"),
