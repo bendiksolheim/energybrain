@@ -436,36 +436,38 @@ impl House {
         Publish::text(f.spec().topics.energy.clone(), format!("{kwh:.2}"), true)
     }
 
-    /// The retained `sim/state` snapshot.
+    /// The retained `sim/state` snapshot. Quantities use the unit types, so they serialize
+    /// as `{"value": …, "unit": …}` like energybrain's own API.
     fn state(&self) -> Publish {
         let b = self.loads.breakdown(self.now);
+        let kw = |v: Kw| Kw::new(round(v.value(), 3));
         let floors: Vec<_> = self
             .floors
             .iter()
             .map(|f| {
                 json!({
                     "zone": f.spec().topics.zone.as_str(),
-                    "temperature_c": round(f.temperature().value(), 2),
-                    "setpoint_c": f.setpoint().value(),
+                    "temperature": Celsius::new(round(f.temperature().value(), 2)),
+                    "setpoint": f.setpoint(),
                     "heating": f.heating(),
                 })
             })
             .collect();
         let state = json!({
             "at": self.now.to_string(),
-            "power_kw": round(self.power().value(), 3),
-            "loads_kw": {
-                "background": round(b.background.value(), 3),
-                "heat_pump": round(b.heat_pump.value(), 3),
-                "appliances": round(b.appliances.value(), 3),
-                "ev": round(b.ev.value(), 3),
-                "extra": round(b.extra.value(), 3),
-                "floors": round(self.floors_power().value(), 3),
+            "power": kw(self.power()),
+            "loads": {
+                "background": kw(b.background),
+                "heat_pump": kw(b.heat_pump),
+                "appliances": kw(b.appliances),
+                "ev": kw(b.ev),
+                "extra": kw(b.extra),
+                "floors": kw(self.floors_power()),
             },
             "running": self.loads.running(),
-            "outdoor_c": self.loads.outdoor().value(),
+            "outdoor": self.loads.outdoor(),
             "meter_paused": self.meter_paused,
-            "register_kwh": round(self.register.value(), 3),
+            "register": Kwh::new(round(self.register.value(), 3)),
             "floors": floors,
         });
         Publish::text(STATE_TOPIC.to_owned(), state.to_string(), true)
@@ -694,12 +696,12 @@ mod tests {
         h.step(h.now() + secs(1));
         let before = h.power();
         let out = h.on_message("sim/ev/set", b"7.4").unwrap();
-        assert_eq!(state(&out)["loads_kw"]["ev"], 7.4);
+        assert_eq!(state(&out)["loads"]["ev"]["value"], 7.4);
         assert!((h.power() - before - Kw::new(7.4)).value().abs() < 1e-9);
         h.on_message("sim/ev/set", b"OFF").unwrap();
         let out = h.on_message("sim/load/set", b"2").unwrap();
-        assert_eq!(state(&out)["loads_kw"]["extra"], 2.0);
-        assert_eq!(state(&out)["loads_kw"]["ev"], 0.0);
+        assert_eq!(state(&out)["loads"]["extra"]["value"], 2.0);
+        assert_eq!(state(&out)["loads"]["ev"]["value"], 0.0);
         assert_eq!(
             h.on_message("sim/ev/set", b"0"),
             Err("0 must be above 0".into())
@@ -738,15 +740,15 @@ mod tests {
     fn outdoor_temperature_and_panel_setpoints_can_be_changed() {
         let (mut h, _) = house("");
         let out = h.on_message("sim/outdoor/set", b"-20").unwrap();
-        assert_eq!(state(&out)["outdoor_c"], -20.0);
-        assert_eq!(state(&out)["loads_kw"]["heat_pump"], 1.5);
+        assert_eq!(state(&out)["outdoor"]["value"], -20.0);
+        assert_eq!(state(&out)["loads"]["heat_pump"]["value"], 1.5);
         assert_eq!(
             h.on_message("sim/outdoor/set", b"cold"),
             Err("not a number: \"cold\"".into())
         );
         let out = h.on_message("sim/zone/gang/setpoint/set", b"24").unwrap();
         assert_eq!(on(&out, "zwave/Gang/Gulv_gang/67/1/setpoint/1"), ["24"]);
-        assert_eq!(state(&out)["floors"][2]["setpoint_c"], 24.0);
+        assert_eq!(state(&out)["floors"][2]["setpoint"]["value"], 24.0);
         assert_eq!(
             h.on_message("sim/zone/stue/setpoint/set", b"24"),
             Err("unknown zone \"stue\"".into())
@@ -855,8 +857,8 @@ mod tests {
                 summary,
                 "{} {:>6.3} kW  ev {:>3}  appliances {:?}  heating {:?}",
                 s["at"].as_str().unwrap(),
-                s["power_kw"].as_f64().unwrap(),
-                s["loads_kw"]["ev"],
+                s["power"]["value"].as_f64().unwrap(),
+                s["loads"]["ev"]["value"],
                 s["running"].as_array().unwrap(),
                 heating,
             )

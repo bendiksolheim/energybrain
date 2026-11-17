@@ -241,7 +241,7 @@ mod tests {
         observer.publish(&text("sim/ev/set", "fast")).await.unwrap();
         observer.publish(&text("sim/ev/set", "7.4")).await.unwrap();
         expect(&mut seen, STATE_TOPIC, |p| {
-            serde_json::from_slice::<serde_json::Value>(p).unwrap()["loads_kw"]["ev"] == 7.4
+            serde_json::from_slice::<serde_json::Value>(p).unwrap()["loads"]["ev"]["value"] == 7.4
         })
         .await;
 

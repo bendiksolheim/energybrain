@@ -27,7 +27,8 @@ pub struct DayPeak {
     pub date: Date,
     /// The day's highest hour.
     pub hour: HourStart,
-    /// Its energy.
+    /// Its energy (`energy` in JSON, where the unit is part of the value).
+    #[serde(rename = "energy")]
     pub kwh: Kwh,
 }
 

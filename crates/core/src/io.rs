@@ -179,7 +179,9 @@ pub enum EventKind {
     Override {
         /// Zone.
         zone: ZoneId,
-        /// The user's setpoint.
+        /// The user's setpoint (`setpoint` in JSON, which would otherwise read
+        /// `"value": {"value": …}`).
+        #[serde(rename = "setpoint")]
         value: Celsius,
         /// When it ends.
         until: Timestamp,
@@ -254,7 +256,8 @@ pub struct ZoneStatus {
     pub override_until: Option<Timestamp>,
     /// Last reported power.
     pub power: Option<Kw>,
-    /// Learned heating power.
+    /// Learned heating power (`heating_power` in JSON, where the unit is part of the value).
+    #[serde(rename = "heating_power")]
     pub heating_kw: Option<Kw>,
 }
 
@@ -410,7 +413,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&e).unwrap(),
-            r#"{"hour":"2026-11-15T17:00:00Z","kwh":4.2,"quality":"measured"}"#
+            r#"{"hour":"2026-11-15T17:00:00Z","energy":{"value":4.2,"unit":"kWh"},"quality":"measured"}"#
         );
     }
 }

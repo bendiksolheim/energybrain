@@ -1,6 +1,6 @@
 ---
 source: crates/core/src/io.rs
-assertion_line: 380
+assertion_line: 383
 expression: json(&events)
 ---
 [
@@ -12,9 +12,18 @@ expression: json(&events)
       "event": {
         "type": "shed",
         "zone": "bad",
-        "load": 1.5,
-        "projected": 5.2,
-        "limit": 4.7
+        "load": {
+          "value": 1.5,
+          "unit": "kW"
+        },
+        "projected": {
+          "value": 5.2,
+          "unit": "kWh"
+        },
+        "limit": {
+          "value": 4.7,
+          "unit": "kWh"
+        }
       }
     }
   },
@@ -37,9 +46,18 @@ expression: json(&events)
       "type": "guard",
       "event": {
         "type": "limit_unreachable",
-        "projected": 9.0,
-        "limit": 4.7,
-        "available": 1.0
+        "projected": {
+          "value": 9.0,
+          "unit": "kWh"
+        },
+        "limit": {
+          "value": 4.7,
+          "unit": "kWh"
+        },
+        "available": {
+          "value": 1.0,
+          "unit": "kWh"
+        }
       }
     }
   },
@@ -49,7 +67,10 @@ expression: json(&events)
     "kind": {
       "type": "override",
       "zone": "bad",
-      "value": 27.0,
+      "setpoint": {
+        "value": 27.0,
+        "unit": "°C"
+      },
       "until": "2026-11-15T19:20:00Z"
     }
   },

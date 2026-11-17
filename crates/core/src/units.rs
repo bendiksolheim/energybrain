@@ -16,17 +16,19 @@ use jiff::SignedDuration;
 const SECONDS_PER_HOUR: f64 = 3600.0;
 
 /// Shared plumbing for every unit: constructor, accessor, `Display` with a unit suffix,
-/// and `min`/`max` helpers.
+/// `min`/`max` helpers, and JSON serialization as `{"value": 5.3, "unit": "kWh"}`.
 macro_rules! unit {
-    ($(#[$doc:meta])* $name:ident, $suffix:literal) => {
+    ($(#[$doc:meta])* $name:ident, $unit:literal) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default, serde::Serialize)]
-        #[serde(transparent)]
+        #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
         pub struct $name(f64);
 
         impl $name {
             /// Zero of this unit.
             pub const ZERO: Self = Self(0.0);
+
+            /// The unit's symbol, as used by `Display` and in serialized values.
+            pub const UNIT: &'static str = $unit;
 
             /// Wraps a raw value expressed in this unit.
             pub const fn new(value: f64) -> Self {
@@ -55,7 +57,20 @@ macro_rules! unit {
             /// Honours precision, e.g. `format!("{:.1}", Kw::new(2.25))` → `"2.2 kW"`.
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 fmt::Display::fmt(&self.0, f)?;
-                f.write_str($suffix)
+                f.write_str(" ")?;
+                f.write_str($unit)
+            }
+        }
+
+        impl serde::Serialize for $name {
+            /// Serializes as `{"value": <number>, "unit": "<symbol>"}` so API readers never have
+            /// to guess the unit.
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                use serde::ser::SerializeStruct;
+                let mut st = s.serialize_struct(stringify!($name), 2)?;
+                st.serialize_field("value", &self.0)?;
+                st.serialize_field("unit", $unit)?;
+                st.end()
             }
         }
     };
@@ -116,48 +131,48 @@ macro_rules! additive {
 unit!(
     /// Power in kilowatts.
     Kw,
-    " kW"
+    "kW"
 );
 unit!(
     /// Energy in kilowatt-hours.
     Kwh,
-    " kWh"
+    "kWh"
 );
 unit!(
     /// Absolute temperature in degrees Celsius.
     Celsius,
-    " °C"
+    "°C"
 );
 unit!(
     /// Temperature difference in kelvin / degrees Celsius.
     CelsiusDelta,
-    " K"
+    "K"
 );
 unit!(
     /// Money in Norwegian kroner.
     Kr,
-    " kr"
+    "kr"
 );
 unit!(
     /// Reactive power in kilovolt-ampere reactive (reported by the meter, not used by the
     /// guard).
     Kvar,
-    " kvar"
+    "kvar"
 );
 unit!(
     /// Reactive energy in kilovolt-ampere reactive hours.
     Kvarh,
-    " kvarh"
+    "kvarh"
 );
 unit!(
     /// Electric current in amperes.
     Ampere,
-    " A"
+    "A"
 );
 unit!(
     /// Electric potential in volts.
     Volt,
-    " V"
+    "V"
 );
 
 additive!(Kw);
@@ -261,6 +276,37 @@ mod tests {
         assert_eq!(Kvarh::new(3.5).to_string(), "3.5 kvarh");
         assert_eq!(Ampere::new(9.5).to_string(), "9.5 A");
         assert_eq!(Volt::new(230.1).to_string(), "230.1 V");
+    }
+
+    #[test]
+    fn serializes_value_with_unit() {
+        use serde_json::to_string as json;
+        let all = [
+            json(&Kw::new(2.5)).unwrap(),
+            json(&Kwh::new(5.3)).unwrap(),
+            json(&Celsius::new(21.0)).unwrap(),
+            json(&CelsiusDelta::new(-4.0)).unwrap(),
+            json(&Kr::new(233.0)).unwrap(),
+            json(&Kvar::new(0.25)).unwrap(),
+            json(&Kvarh::new(3.5)).unwrap(),
+            json(&Ampere::new(9.5)).unwrap(),
+            json(&Volt::new(230.1)).unwrap(),
+        ];
+        assert_eq!(
+            all,
+            [
+                r#"{"value":2.5,"unit":"kW"}"#,
+                r#"{"value":5.3,"unit":"kWh"}"#,
+                r#"{"value":21.0,"unit":"°C"}"#,
+                r#"{"value":-4.0,"unit":"K"}"#,
+                r#"{"value":233.0,"unit":"kr"}"#,
+                r#"{"value":0.25,"unit":"kvar"}"#,
+                r#"{"value":3.5,"unit":"kvarh"}"#,
+                r#"{"value":9.5,"unit":"A"}"#,
+                r#"{"value":230.1,"unit":"V"}"#,
+            ]
+        );
+        assert_eq!(Kwh::UNIT, "kWh");
     }
 
     #[test]

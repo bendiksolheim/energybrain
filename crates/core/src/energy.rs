@@ -55,7 +55,8 @@ pub enum Quality {
 pub struct HourEnergy {
     /// The hour.
     pub hour: HourStart,
-    /// Energy imported during it.
+    /// Energy imported during it (`energy` in JSON, where the unit is part of the value).
+    #[serde(rename = "energy")]
     pub kwh: Kwh,
     /// How it was determined.
     pub quality: Quality,

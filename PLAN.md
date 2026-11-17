@@ -325,7 +325,8 @@ sane, topics non-empty. Errors are typed and point at the offending key.
   isn't stale; 503 with a JSON reason otherwise.
 - `GET /metrics` — Prometheus text, rendered directly from the status (see decision log).
 - `GET /api/state` — JSON: mode, current hour, used_so_far, projection, limit, top-3
-  days, tier, per-zone base/decision/reasons/shed state, learned `heating_kw`, overrides.
+  days, tier, per-zone base/decision/reasons/shed state, learned heating power, overrides.
+  Quantities serialize as `{"value": …, "unit": "kWh"}` (see decision log).
 - `GET /api/events?since=<rfc3339>&limit=<n>` — persisted guard events (shed, would-shed,
   release, override, limit unreachable) with reasons, newest first.
 - Tested with `tower::ServiceExt::oneshot`, no real socket needed.

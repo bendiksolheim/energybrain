@@ -139,6 +139,11 @@ docs don't include a complete `config.json` example.
 | `GET /api/events?since=<RFC 3339>&limit=<n>` | Event log, newest first (max 1000) |
 | `GET /metrics` | Prometheus text (`energybrain_*`), for Grafana later |
 
+In the JSON (`/api/state`, `/api/events`, `energybrain/status`), every physical quantity
+carries its unit: `"used": {"value": 1.5, "unit": "kWh"}`. Units are `kW`, `kWh`, `°C`,
+`K`, `kr`, `kvar`, `kvarh`, `A` and `V`; timestamps are RFC 3339 UTC strings. To get the
+bare number, use e.g. `jq '.used.value'`.
+
 ## Reviewing observe mode
 
 Leave the service running in observe mode for at least two weeks, including some cold

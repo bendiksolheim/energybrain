@@ -122,7 +122,14 @@ keep it up to date if a decision changes.
   outputs gained `WouldWrite`, `PersistZoneBase`, `PersistMode`, `PersistShedAllowed`.
 - Core derives `serde::Serialize` (serde is pure) on status/event types so MQTT
   `energybrain/status`, HTTP `/api/state` and the stored event log share one JSON shape, pinned by
-  insta snapshots in `core/src/io.rs`. Units serialize as bare numbers, timestamps as RFC 3339 UTC.
+  insta snapshots in `core/src/io.rs`. Timestamps serialize as RFC 3339 UTC.
+- Units serialize as `{"value": 5.3, "unit": "kWh"}` (user request: bare numbers left readers
+  guessing kW vs kWh). The unit string is the same literal `Display` uses (`Kwh::UNIT`). JSON
+  field names don't repeat the unit: `heating_kw` → `heating_power`, `DayPeak`/`HourEnergy`
+  `kwh` → `energy`, override event `value` → `setpoint` (`#[serde(rename)]` only; Rust names
+  unchanged). Tier `price` is `"kr"` (per month, implied by context). Events stored before the
+  change keep bare numbers; no migration (nothing deployed yet). The sim's `sim/state` uses the
+  same shape (`power`, `loads`, `temperature`, `setpoint`, `outdoor`, `register`).
 - `rumqttc`/`rumqttd` are used with `default-features = false` (no TLS; the broker is plain TCP).
 - M7 MQTT tests: **embedded `rumqttd`** (in-process, free port, with username/password auth)
   — no Docker or testcontainers needed. Built from a TOML snippet since `rumqttd::Config` is serde.

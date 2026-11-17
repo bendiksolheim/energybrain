@@ -1,6 +1,6 @@
 ---
 source: crates/core/src/io.rs
-assertion_line: 331
+assertion_line: 334
 expression: json(&status)
 ---
 {
@@ -8,40 +8,82 @@ expression: json(&status)
   "mode": "observe",
   "guard": "shedding",
   "hour": "2026-11-15T17:00:00Z",
-  "used": 1.5,
-  "projected": 5.2,
-  "power": 6.1,
+  "used": {
+    "value": 1.5,
+    "unit": "kWh"
+  },
+  "projected": {
+    "value": 5.2,
+    "unit": "kWh"
+  },
+  "power": {
+    "value": 6.1,
+    "unit": "kW"
+  },
   "freshness": "fresh",
   "meter_last_seen": "2026-11-15T17:19:58Z",
   "limit": {
-    "allowed": 7.0,
-    "effective": 6.7,
+    "allowed": {
+      "value": 7.0,
+      "unit": "kWh"
+    },
+    "effective": {
+      "value": 6.7,
+      "unit": "kWh"
+    },
     "basis": {
       "type": "today_already_higher",
-      "today_max": 7.0
+      "today_max": {
+        "value": 7.0,
+        "unit": "kWh"
+      }
     }
   },
   "top_days": [
     {
       "date": "2026-11-15",
       "hour": "2026-11-15T17:00:00Z",
-      "kwh": 7.0
+      "energy": {
+        "value": 7.0,
+        "unit": "kWh"
+      }
     }
   ],
-  "top_average": 7.0,
+  "top_average": {
+    "value": 7.0,
+    "unit": "kW"
+  },
   "tier": {
     "index": 2,
-    "from": 5.0,
-    "to": 10.0,
-    "price": 397.0
+    "from": {
+      "value": 5.0,
+      "unit": "kW"
+    },
+    "to": {
+      "value": 10.0,
+      "unit": "kW"
+    },
+    "price": {
+      "value": 397.0,
+      "unit": "kr"
+    }
   },
   "zones": [
     {
       "id": "bad",
       "name": "Bad",
-      "base": 26.5,
-      "reported": 26.5,
-      "decision": 22.5,
+      "base": {
+        "value": 26.5,
+        "unit": "°C"
+      },
+      "reported": {
+        "value": 26.5,
+        "unit": "°C"
+      },
+      "decision": {
+        "value": 22.5,
+        "unit": "°C"
+      },
       "reasons": [
         {
           "policy": "peak_guard",
@@ -51,8 +93,14 @@ expression: json(&status)
       "shed": true,
       "shed_allowed": true,
       "override_until": null,
-      "power": 1.5,
-      "heating_kw": 1.45
+      "power": {
+        "value": 1.5,
+        "unit": "kW"
+      },
+      "heating_power": {
+        "value": 1.45,
+        "unit": "kW"
+      }
     }
   ]
 }
