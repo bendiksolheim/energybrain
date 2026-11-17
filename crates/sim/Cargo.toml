@@ -1,0 +1,25 @@
+[package]
+name = "energybrain-sim"
+description = "Development only: a simulated house (HAN meter, Z-TRM3 thermostats, household loads) on MQTT."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+energybrain-config = { version = "0.1.0", path = "../config" }
+energybrain-core = { version = "0.1.0", path = "../core" }
+energybrain-han = { version = "0.1.0", path = "../han" }
+jiff = "1.0.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+toml = "1.2.1"
+
+[dev-dependencies]
+energybrain-mqtt = { path = "../mqtt" }
+insta = "1.49.0"
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

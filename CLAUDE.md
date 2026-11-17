@@ -177,3 +177,7 @@ keep it up to date if a decision changes.
   byte for byte). To make that possible `parse` now returns every value in the lists (Q±,
   per-phase currents/voltages as `Phases::One`/`Three`, R±), with new units `Kvar`, `Kvarh`,
   `Ampere`, `Volt` in core. The HDLC `frame` builder moved from tests into `hdlc.rs`.
+- S3: `energybrain-sim` crate (dev only, no new dependencies: SplitMix64 is hand-rolled instead
+  of `rand`). `House` is pure discrete-event code like the engine; its tests feed every
+  published message through energybrain's real `Translator` (dev-dependency on
+  `energybrain-mqtt`) so the simulated wire format can't drift from what energybrain parses.

@@ -550,31 +550,35 @@ Two files, so the production config schema (unknown keys rejected) stays free of
 - `config/sim.toml`: parsed by the sim crate, with the same validation style as the
   energybrain config (typed errors naming the key, unknown keys rejected):
   ```toml
-  factor = 6                       # simulated seconds per real second
-  start = "2026-12-01T16:00"       # local time in the energybrain config's timezone
-  seed = 1
-  initial_mode = "active"          # published to energybrain/mode/set at startup
-  outdoor_c = -5.0                 # drives floor heat loss and heat-pump load
+  factor = 6                       # simulated seconds per real second (1–3600)
+  start = "2026-12-01T16:00"       # required; local time in the energybrain config's zone
+  seed = 1                         # every random choice derives from it
+  initial_mode = "active"          # published to energybrain/mode/set at startup (optional)
+  outdoor_c = -5.0                 # heat-pump load and floor heat loss
+  indoor_c = 20.0                  # floors lose heat to indoor + 20 % towards outdoor
+  register_kwh = 10000             # the meter's A+ register at the start
 
   [background]                     # whole-house load excluding floors, EV, heat pump
-  profile_kw = [0.4, 0.4, …]       # 24 values, one per local hour
-  noise_kw = 0.15
+  profile_kw = [0.35, 0.3, …]      # 24 values, one per local hour (default: a typical day)
+  noise_kw = 0.15                  # uniform ± deviation, resampled every simulated minute
 
   [heat_pump]
-  max_kw = 1.5                     # scales with outdoor temperature, cycles on/off
+  max_kw = 1.5                     # linear from idle at 15 °C to full at −15 °C outdoors
 
   [[appliance]]                    # random short loads: kettle, oven, washer, …
-  name = "kettle"; kw = 2.0; minutes = 3; per_day = 4
+  name = "kettle"; kw = 2.0; minutes = 3; per_day = 4; from_hour = 6; to_hour = 23
 
-  [[ev]]                           # scheduled sessions, plus manual control (below)
+  [[ev]]                           # daily sessions, plus manual control (below)
   from = "17:30"; kwh = 20.0; kw = 7.4
 
-  [[floor]]                        # one per energybrain zone id; physics only
-  zone = "bad"; heater_kw = 1.5; setpoint = 26.0; loss = 0.8
+  [[floor]]                        # per energybrain zone id; physics only, all optional
+  zone = "bad"; heater_kw = 1.5; setpoint = 26.0
+  capacity_kwh_per_k = 0.5; loss_kw_per_k = 0.08; ambient_c = 12.0
   ```
   The simulated thermostats are built from the energybrain config's zones and topics, so
   they always match what energybrain subscribes to. `sim.toml` only adds the physical
-  model per zone id and must name exactly the configured zones.
+  model per zone id. A zone it doesn't list gets defaults (heater = the zone's
+  `nominal_kw`, setpoint 22 °C); an unknown or repeated zone id is an error.
 
 ### Simulated devices (what goes on the wire)
 - **Meter** (topic `meter.topic`, raw bytes), timed in simulated time:
@@ -589,14 +593,24 @@ Two files, so the production config schema (unknown keys rejected) stays free of
   - on `<setpoint>/set`, the new value is echoed twice within 1 s;
   - power in W (~0.1 when idle), on change and every ~90 s;
   - the kWh counter, which grows with the heater's energy, published every 5 min.
-- **Floor model:** floor temperature `T` with
-  `dT/dt = gain × heater_on − loss × (T − f(outdoor))`, and a thermostat with ±0.5 °C
-  hysteresis around its setpoint. A shed (setpoint − 4 °C) therefore keeps the heater off
+- **Floor model:** one thermal mass per floor,
+  `capacity · dT/dt = heater − loss · (T − environment)`, where the environment is
+  `ambient_c` if set, else `indoor + 0.2 · (outdoor − indoor)`. The thermostat has ±0.5 °C
+  hysteresis around its setpoint, and clamps writes to 5–40 °C and rounds them to its 0.5 °C
+  step, as a Z-TRM3 does. A shed (setpoint − 4 °C) therefore keeps the heater off
   until the floor really cools, as in reality. A user change via MQTT (publishing a new
   setpoint on the device's own topic, as the Z-Wave panel would) is supported, to test
   overrides.
 - **Whole-house power** = background profile + noise + appliances + heat pump + EV +
   Σ floor heaters. It is integrated into the A+ register.
+- **Reproducible randomness:** noise, appliance starts and EV plug-ins are only decided
+  on whole simulated-minute ticks, so a run depends on `seed` (and on control messages),
+  not on how finely the driver steps. An EV `from` time that falls in the skipped hour of
+  spring-forward doesn't start that day; one in the repeated autumn hour starts twice.
+- **Discrete events:** `House::step(to)` runs every due event (frames, reports, echoes,
+  minute ticks, the hour-shift capture) in time order and integrates the physics between
+  them. If a run starts exactly on the hour, its first list 3 at hh:00:10 carries the
+  starting register, as a real meter's would.
 - **Control topics** (`sim/…`, for poking at a live run from MQTT Explorer or
   `mosquitto_pub`):
   - `sim/ev/set` takes `off` or a power in kW;
