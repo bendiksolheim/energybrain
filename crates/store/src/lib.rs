@@ -3,19 +3,24 @@
 //! The store keeps what the engine asks it to (`Output::Persist*`) and hands it back as a
 //! [`PersistedState`] at startup. Daily peaks are not stored: they are derived from the
 //! hourly energy. Timestamps are UTC epoch seconds.
+//!
+//! [`SqliteStore`] also keeps a sample log for the history graphs: the first status in each
+//! minute is recorded (see [`Sample`]), and samples older than the retention are pruned
+//! once an hour.
 
 use std::path::Path;
 
 use energybrain_core::energy::{HourEnergy, Quality};
 use energybrain_core::engine::{PersistedState, PersistedZone};
 use energybrain_core::guard::GuardEvent;
+use energybrain_core::guard::GuardStatus;
 use energybrain_core::ids::ZoneId;
-use energybrain_core::io::{Event, EventKind, Output};
+use energybrain_core::io::{Event, EventKind, Output, Sample, Status, ZoneSample};
 use energybrain_core::mode::Mode;
 use energybrain_core::time::HourStart;
 use energybrain_core::units::{Celsius, Kw, Kwh};
 use energybrain_core::zone::Override;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use rusqlite::types::FromSql;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
@@ -47,7 +52,8 @@ pub trait Store: Send {
 }
 
 /// Schema migrations, applied in order. Index + 1 is the schema version.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
     CREATE TABLE hourly_energy (
         hour_start_utc INTEGER PRIMARY KEY,
         kwh REAL NOT NULL,
@@ -81,12 +87,120 @@ const MIGRATIONS: &[&str] = &["
         json TEXT NOT NULL
     );
     CREATE INDEX events_at ON events (at);
-"];
+",
+    "
+    CREATE TABLE samples (
+        at INTEGER PRIMARY KEY,
+        mode TEXT NOT NULL,
+        guard TEXT NOT NULL,
+        power_kw REAL,
+        used_kwh REAL NOT NULL,
+        projected_kwh REAL,
+        allowed_kwh REAL NOT NULL,
+        limit_kwh REAL NOT NULL
+    );
+    CREATE TABLE zone_samples (
+        at INTEGER NOT NULL,
+        zone TEXT NOT NULL,
+        idx INTEGER NOT NULL,
+        base REAL,
+        reported REAL,
+        decision REAL,
+        power_kw REAL,
+        shed INTEGER NOT NULL,
+        overridden INTEGER NOT NULL,
+        PRIMARY KEY (at, zone)
+    ) WITHOUT ROWID;
+",
+];
+
+/// How long samples are kept unless configured otherwise.
+pub const DEFAULT_SAMPLE_RETENTION: SignedDuration = SignedDuration::from_hours(90 * 24);
+
+/// At most one sample per this many seconds.
+const SAMPLE_INTERVAL_SECS: i64 = 60;
+
+/// Decides which statuses become samples, and when old ones are pruned.
+#[derive(Debug)]
+struct Sampler {
+    retention: SignedDuration,
+    last_minute: Option<i64>,
+    last_prune_hour: Option<i64>,
+}
+
+impl Sampler {
+    fn new() -> Self {
+        Self {
+            retention: DEFAULT_SAMPLE_RETENTION,
+            last_minute: None,
+            last_prune_hour: None,
+        }
+    }
+
+    /// Records `status` if it is the first one in its minute; prunes on the first sample
+    /// of each hour.
+    fn record(&mut self, tx: &Transaction<'_>, status: &Status) -> Result<(), StoreError> {
+        let at = status.at.as_second();
+        let minute = at.div_euclid(SAMPLE_INTERVAL_SECS);
+        if self.last_minute == Some(minute) {
+            return Ok(());
+        }
+        insert_sample(tx, &Sample::of(status))?;
+        self.last_minute = Some(minute);
+        let hour = at.div_euclid(3600);
+        if self.last_prune_hour != Some(hour) {
+            let before = at.saturating_sub(self.retention.as_secs());
+            tx.execute("DELETE FROM samples WHERE at < ?1", [before])?;
+            tx.execute("DELETE FROM zone_samples WHERE at < ?1", [before])?;
+            self.last_prune_hour = Some(hour);
+        }
+        Ok(())
+    }
+}
+
+fn insert_sample(tx: &Transaction<'_>, s: &Sample) -> Result<(), StoreError> {
+    let at = s.at.as_second();
+    tx.execute(
+        "INSERT OR REPLACE INTO samples
+         (at, mode, guard, power_kw, used_kwh, projected_kwh, allowed_kwh, limit_kwh)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            at,
+            s.mode.as_str(),
+            s.guard.as_str(),
+            s.power.map(Kw::value),
+            s.used.value(),
+            s.projected.map(Kwh::value),
+            s.allowed.value(),
+            s.limit.value()
+        ],
+    )?;
+    for (idx, z) in (0_i64..).zip(&s.zones) {
+        tx.execute(
+            "INSERT OR REPLACE INTO zone_samples
+             (at, zone, idx, base, reported, decision, power_kw, shed, overridden)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                at,
+                z.id.as_str(),
+                idx,
+                z.base.map(Celsius::value),
+                z.reported.map(Celsius::value),
+                z.decision.map(Celsius::value),
+                z.power.map(Kw::value),
+                z.shed,
+                z.overridden
+            ],
+        )?;
+    }
+    Ok(())
+}
 
 /// The `SQLite` store.
 #[derive(Debug)]
 pub struct SqliteStore {
     conn: Connection,
+    sampler: Sampler,
 }
 
 impl SqliteStore {
@@ -117,7 +231,17 @@ impl SqliteStore {
         tx.execute("DELETE FROM schema_version", [])?;
         tx.execute("INSERT INTO schema_version (version) VALUES (?1)", [known])?;
         tx.commit()?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            sampler: Sampler::new(),
+        })
+    }
+
+    /// Keeps samples for `retention` instead of [`DEFAULT_SAMPLE_RETENTION`].
+    #[must_use]
+    pub fn with_sample_retention(mut self, retention: SignedDuration) -> Self {
+        self.sampler.retention = retention;
+        self
     }
 
     /// The schema version of the open database.
@@ -138,24 +262,69 @@ impl SqliteStore {
         let mut stmt = self
             .conn
             .prepare("SELECT json FROM events WHERE at >= ?1 ORDER BY id DESC LIMIT ?2")?;
-        let rows = stmt.query_map(params![since, limit], |r| r.get::<_, String>(0))?;
-        rows.map(|json| {
-            let json = json?;
-            serde_json::from_str(&json).map_err(|e| StoreError::Corrupt(format!("event json: {e}")))
-        })
-        .collect()
+        let rows = stmt.query_map(params![since, limit], read_json)?;
+        rows.map(parse_event).collect()
     }
 
-    /// Hourly energy per zone (from the thermostats' own counters) since `since`.
+    /// Stored events (as JSON) in `[from, to)`, oldest first, at most `limit`.
+    pub fn events_between(
+        &self,
+        from: Timestamp,
+        to: Timestamp,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, StoreError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut stmt = self.conn.prepare(
+            "SELECT json FROM events WHERE at >= ?1 AND at < ?2 ORDER BY at, id LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![from.as_second(), to.as_second(), limit], read_json)?;
+        rows.map(parse_event).collect()
+    }
+
+    /// Hourly energy for hours starting in `[from, to)`, oldest first.
+    pub fn hours(&self, from: Timestamp, to: Timestamp) -> Result<Vec<HourEnergy>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT hour_start_utc, kwh, quality FROM hourly_energy
+             WHERE hour_start_utc >= ?1 AND hour_start_utc < ?2 ORDER BY hour_start_utc",
+        )?;
+        let rows = stmt.query_map(params![from.as_second(), to.as_second()], read_hour)?;
+        rows.map(hour_energy).collect()
+    }
+
+    /// Samples taken in `[from, to)`, oldest first, each with its zones in status order.
+    pub fn samples(&self, from: Timestamp, to: Timestamp) -> Result<Vec<Sample>, StoreError> {
+        let range = params![from.as_second(), to.as_second()];
+        let mut stmt = self.conn.prepare(
+            "SELECT at, mode, guard, power_kw, used_kwh, projected_kwh, allowed_kwh, limit_kwh
+             FROM samples WHERE at >= ?1 AND at < ?2 ORDER BY at",
+        )?;
+        let rows = stmt.query_map(range, SampleRow::read)?;
+        let mut samples = rows
+            .map(|row| row?.into_sample())
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = self.conn.prepare(
+            "SELECT at, zone, base, reported, decision, power_kw, shed, overridden
+             FROM zone_samples WHERE at >= ?1 AND at < ?2 ORDER BY at, idx",
+        )?;
+        for row in stmt.query_map(range, ZoneSampleRow::read)? {
+            let (at, zone) = row?.into_zone_sample()?;
+            attach(&mut samples, at, zone)?;
+        }
+        Ok(samples)
+    }
+
+    /// Hourly energy per zone (from the thermostats' own counters) for hours starting in
+    /// `[from, to)`.
     pub fn zone_hours(
         &self,
-        since: Timestamp,
+        from: Timestamp,
+        to: Timestamp,
     ) -> Result<Vec<(ZoneId, HourStart, Kwh)>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT zone, hour_start_utc, kwh FROM zone_hourly_energy
-             WHERE hour_start_utc >= ?1 ORDER BY hour_start_utc, zone",
+             WHERE hour_start_utc >= ?1 AND hour_start_utc < ?2 ORDER BY hour_start_utc, zone",
         )?;
-        let rows = stmt.query_map([since.as_second()], read_zone_hour)?;
+        let rows = stmt.query_map(params![from.as_second(), to.as_second()], read_zone_hour)?;
         rows.map(|row| {
             let (zone, hour, kwh) = row?;
             Ok((zone_id(&zone)?, hour_start(hour)?, Kwh::new(kwh)))
@@ -180,12 +349,7 @@ impl Store for SqliteStore {
         )?;
         let rows = stmt.query_map([hours_since.as_second()], read_hour)?;
         for row in rows {
-            let (hour, kwh, quality) = row?;
-            let e = HourEnergy {
-                hour: hour_start(hour)?,
-                kwh: Kwh::new(kwh),
-                quality: parse_quality(&quality)?,
-            };
+            let e = hour_energy(row)?;
             state.hours.insert(e.hour, e);
         }
 
@@ -210,6 +374,9 @@ impl Store for SqliteStore {
     fn apply(&mut self, outputs: &[Output]) -> Result<(), StoreError> {
         let tx = self.conn.transaction()?;
         for o in outputs {
+            if let Output::PublishStatus(status) = o {
+                self.sampler.record(&tx, status)?;
+            }
             apply_one(&tx, o)?;
         }
         tx.commit()?;
@@ -375,6 +542,117 @@ fn read_hour(r: &Row<'_>) -> rusqlite::Result<(i64, f64, String)> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
 }
 
+fn hour_energy(row: rusqlite::Result<(i64, f64, String)>) -> Result<HourEnergy, StoreError> {
+    let (hour, kwh, quality) = row?;
+    Ok(HourEnergy {
+        hour: hour_start(hour)?,
+        kwh: Kwh::new(kwh),
+        quality: parse_quality(&quality)?,
+    })
+}
+
+fn read_json(r: &Row<'_>) -> rusqlite::Result<String> {
+    r.get(0)
+}
+
+fn parse_event(json: rusqlite::Result<String>) -> Result<serde_json::Value, StoreError> {
+    serde_json::from_str(&json?).map_err(|e| StoreError::Corrupt(format!("event json: {e}")))
+}
+
+struct SampleRow {
+    at: i64,
+    mode: String,
+    guard: String,
+    power: Option<f64>,
+    used: f64,
+    projected: Option<f64>,
+    allowed: f64,
+    limit: f64,
+}
+
+impl SampleRow {
+    fn read(r: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            at: r.get(0)?,
+            mode: r.get(1)?,
+            guard: r.get(2)?,
+            power: r.get(3)?,
+            used: r.get(4)?,
+            projected: r.get(5)?,
+            allowed: r.get(6)?,
+            limit: r.get(7)?,
+        })
+    }
+
+    fn into_sample(self) -> Result<Sample, StoreError> {
+        let mode = Mode::parse(&self.mode)
+            .ok_or_else(|| StoreError::Corrupt(format!("mode {:?}", self.mode)))?;
+        let guard = GuardStatus::parse(&self.guard)
+            .ok_or_else(|| StoreError::Corrupt(format!("guard {:?}", self.guard)))?;
+        Ok(Sample {
+            at: timestamp(self.at)?,
+            mode,
+            guard,
+            power: self.power.map(Kw::new),
+            used: Kwh::new(self.used),
+            projected: self.projected.map(Kwh::new),
+            allowed: Kwh::new(self.allowed),
+            limit: Kwh::new(self.limit),
+            zones: Vec::new(),
+        })
+    }
+}
+
+struct ZoneSampleRow {
+    at: i64,
+    zone: String,
+    base: Option<f64>,
+    reported: Option<f64>,
+    decision: Option<f64>,
+    power: Option<f64>,
+    shed: bool,
+    overridden: bool,
+}
+
+impl ZoneSampleRow {
+    fn read(r: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            at: r.get(0)?,
+            zone: r.get(1)?,
+            base: r.get(2)?,
+            reported: r.get(3)?,
+            decision: r.get(4)?,
+            power: r.get(5)?,
+            shed: r.get(6)?,
+            overridden: r.get(7)?,
+        })
+    }
+
+    fn into_zone_sample(self) -> Result<(i64, ZoneSample), StoreError> {
+        Ok((
+            self.at,
+            ZoneSample {
+                id: zone_id(&self.zone)?,
+                base: self.base.map(Celsius::new),
+                reported: self.reported.map(Celsius::new),
+                decision: self.decision.map(Celsius::new),
+                power: self.power.map(Kw::new),
+                shed: self.shed,
+                overridden: self.overridden,
+            },
+        ))
+    }
+}
+
+/// Adds a zone's part to the sample taken at `at` (`samples` is sorted by time).
+fn attach(samples: &mut [Sample], at: i64, zone: ZoneSample) -> Result<(), StoreError> {
+    let i = samples
+        .binary_search_by_key(&at, |s| s.at.as_second())
+        .map_err(|_| StoreError::Corrupt(format!("zone sample at {at} has no sample")))?;
+    samples[i].zones.push(zone);
+    Ok(())
+}
+
 fn read_zone_hour(r: &Row<'_>) -> rusqlite::Result<(String, i64, f64)> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
 }
@@ -443,7 +721,12 @@ impl Store for MemoryStore {
 
 #[cfg(test)]
 mod tests {
+    use energybrain_core::energy::Freshness;
     use energybrain_core::guard::ReleaseReason;
+    use energybrain_core::io::ZoneStatus;
+    use energybrain_core::peaks::{HourLimit, LimitBasis};
+    use energybrain_core::tariff::{Tier, TierIndex};
+    use energybrain_core::units::Kr;
 
     use super::*;
 
@@ -673,8 +956,196 @@ mod tests {
         let mut s = SqliteStore::open_in_memory().unwrap();
         s.apply(&outputs()).unwrap();
         assert_eq!(
-            s.zone_hours(ts(SINCE)).unwrap(),
+            s.zone_hours(ts(SINCE), ts("2026-11-16T00:00:00Z")).unwrap(),
             [(zone("bad"), hour("2026-11-15T17:00:00Z"), Kwh::new(1.2))]
+        );
+        assert_eq!(
+            s.zone_hours(ts(SINCE), ts("2026-11-15T17:00:00Z")).unwrap(),
+            []
+        );
+    }
+
+    /// A status at `at` with one fully known zone and one that has reported nothing.
+    fn status(at: &str) -> Status {
+        let at = ts(at);
+        let z = |id: &str, name: &str| ZoneStatus {
+            id: zone(id),
+            name: name.to_owned(),
+            base: None,
+            reported: None,
+            decision: None,
+            reasons: vec![],
+            shed: false,
+            shed_allowed: true,
+            override_until: None,
+            power: None,
+            heating_kw: None,
+        };
+        Status {
+            at,
+            mode: Mode::Observe,
+            guard: GuardStatus::Shedding,
+            hour: HourStart::containing(at),
+            used: Kwh::new(1.5),
+            projected: Some(Kwh::new(5.2)),
+            power: Some(Kw::new(6.1)),
+            freshness: Freshness::Fresh,
+            meter_last_seen: Some(at),
+            limit: HourLimit {
+                allowed: Kwh::new(5.0),
+                effective: Kwh::new(4.7),
+                basis: LimitBasis::TierBound,
+            },
+            top_days: vec![],
+            top_average: Kw::ZERO,
+            tier: Tier {
+                index: TierIndex(1),
+                from: Kw::new(2.0),
+                to: Some(Kw::new(5.0)),
+                price: Kr::new(233.0),
+            },
+            zones: vec![
+                ZoneStatus {
+                    base: Some(Celsius::new(26.5)),
+                    reported: Some(Celsius::new(22.5)),
+                    decision: Some(Celsius::new(22.5)),
+                    shed: true,
+                    override_until: Some(at),
+                    power: Some(Kw::new(1.4)),
+                    ..z("bad", "Bad")
+                },
+                z("kjeller", "Kjeller"),
+            ],
+        }
+    }
+
+    fn publish(s: &mut SqliteStore, statuses: &[Status]) {
+        let out: Vec<Output> = statuses
+            .iter()
+            .map(|st| Output::PublishStatus(Box::new(st.clone())))
+            .collect();
+        s.apply(&out).unwrap();
+    }
+
+    fn sample_times(s: &SqliteStore) -> Vec<String> {
+        s.samples(Timestamp::MIN, Timestamp::MAX)
+            .unwrap()
+            .iter()
+            .map(|x| x.at.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_first_status_of_each_minute_becomes_a_sample() {
+        let mut s = SqliteStore::open_in_memory().unwrap();
+        let first = status("2026-11-15T17:20:05Z");
+        let mut later = status("2026-11-15T17:21:00Z");
+        later.mode = Mode::Active;
+        later.guard = GuardStatus::Idle;
+        later.power = None;
+        later.projected = None;
+        later.zones.reverse();
+        publish(
+            &mut s,
+            &[first.clone(), status("2026-11-15T17:20:55Z"), later.clone()],
+        );
+        let samples = s.samples(Timestamp::MIN, Timestamp::MAX).unwrap();
+        assert_eq!(samples, [Sample::of(&first), Sample::of(&later)]);
+        assert_eq!(samples[1].zones[0].id, zone("kjeller"), "status order kept");
+        let range = s
+            .samples(ts("2026-11-15T17:21:00Z"), ts("2026-11-15T17:22:00Z"))
+            .unwrap();
+        assert_eq!(range, [Sample::of(&later)]);
+        // Other outputs leave the log alone; the memory store ignores statuses.
+        s.apply(&outputs()).unwrap();
+        assert_eq!(sample_times(&s).len(), 2);
+        let mut m = MemoryStore::default();
+        m.apply(&[Output::PublishStatus(Box::new(first))]).unwrap();
+        assert_eq!(m.state, PersistedState::default());
+    }
+
+    #[test]
+    fn samples_older_than_the_retention_are_pruned_once_an_hour() {
+        let mut s = SqliteStore::open_in_memory()
+            .unwrap()
+            .with_sample_retention(SignedDuration::from_hours(24));
+        publish(
+            &mut s,
+            &[
+                status("2026-11-14T10:00:00Z"),
+                status("2026-11-14T10:30:00Z"),
+            ],
+        );
+        // 24 h later, in a new hour: only what is older than a day goes.
+        publish(&mut s, &[status("2026-11-15T10:15:00Z")]);
+        assert_eq!(
+            sample_times(&s),
+            ["2026-11-14T10:30:00Z", "2026-11-15T10:15:00Z"]
+        );
+        // Same hour: no pruning, even though 10:30 yesterday is now more than a day old.
+        publish(&mut s, &[status("2026-11-15T10:45:00Z")]);
+        assert_eq!(sample_times(&s).len(), 3);
+        publish(&mut s, &[status("2026-11-15T11:00:00Z")]);
+        assert_eq!(
+            sample_times(&s),
+            [
+                "2026-11-15T10:15:00Z",
+                "2026-11-15T10:45:00Z",
+                "2026-11-15T11:00:00Z"
+            ]
+        );
+        let zones: i64 = s
+            .conn
+            .query_row("SELECT count(*) FROM zone_samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(zones, 6, "zone parts are pruned with their samples");
+    }
+
+    #[test]
+    fn hours_and_events_are_queryable_by_range() {
+        let mut s = SqliteStore::open_in_memory().unwrap();
+        s.apply(&outputs()).unwrap();
+        let hours = s
+            .hours(ts("2026-11-15T17:00:00Z"), ts("2026-11-15T19:00:00Z"))
+            .unwrap();
+        assert_eq!(
+            hours
+                .iter()
+                .map(|h| (h.hour, h.kwh, h.quality))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    hour("2026-11-15T17:00:00Z"),
+                    Kwh::new(4.2),
+                    Quality::Measured
+                ),
+                (
+                    hour("2026-11-15T18:00:00Z"),
+                    Kwh::new(2.0),
+                    Quality::Interpolated
+                )
+            ]
+        );
+        assert_eq!(
+            s.hours(ts("2026-11-15T18:00:00Z"), ts("2026-11-15T18:00:00Z"))
+                .unwrap(),
+            []
+        );
+        let events = s
+            .events_between(ts("2026-11-15T17:40:00Z"), ts("2026-11-15T17:43:00Z"), 100)
+            .unwrap();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|e| e["kind"]["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["guard", "guard", "override"],
+            "oldest first, end excluded"
+        );
+        assert_eq!(
+            s.events_between(Timestamp::MIN, Timestamp::MAX, 1).unwrap()[0]["at"],
+            "2026-11-15T17:20:00Z"
         );
     }
 
@@ -684,11 +1155,11 @@ mod tests {
         let path = dir.path().join("eb.db");
         {
             let mut s = SqliteStore::open(&path).unwrap();
-            assert_eq!(s.schema_version().unwrap(), 1);
+            assert_eq!(s.schema_version().unwrap(), 2);
             s.apply(&outputs()).unwrap();
         }
         let s = SqliteStore::open(&path).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 1);
+        assert_eq!(s.schema_version().unwrap(), 2);
         assert_eq!(s.load(ts(SINCE)).unwrap(), expected(ts(SINCE)));
     }
 
@@ -704,7 +1175,7 @@ mod tests {
         let err = SqliteStore::open(&path).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "database schema version 99 is newer than this build knows (1)"
+            "database schema version 99 is newer than this build knows (2)"
         );
     }
 
@@ -760,7 +1231,53 @@ mod tests {
         s.conn
             .execute_batch("INSERT INTO zone_hourly_energy VALUES ('Bad Zone', 1794848400, 1.0)")
             .unwrap();
-        assert!(s.zone_hours(ts(SINCE)).is_err());
+        assert!(s.zone_hours(Timestamp::MIN, Timestamp::MAX).is_err());
+        s.conn
+            .execute_batch("INSERT INTO hourly_energy VALUES (1794848400, 1.0, 'guessed')")
+            .unwrap();
+        assert!(s.hours(Timestamp::MIN, Timestamp::MAX).is_err());
+
+        let corrupt_sample = |sql: &str| {
+            let s = SqliteStore::open_in_memory().unwrap();
+            s.conn.execute_batch(sql).unwrap();
+            s.samples(Timestamp::MIN, Timestamp::MAX)
+                .unwrap_err()
+                .to_string()
+        };
+        let sample = |mode: &str, guard: &str| {
+            format!(
+                "INSERT INTO samples VALUES (1794848400, '{mode}', '{guard}', NULL, 1, NULL, 5, 4.7);"
+            )
+        };
+        assert_eq!(
+            corrupt_sample(&sample("turbo", "idle")),
+            "corrupt store: mode \"turbo\""
+        );
+        assert_eq!(
+            corrupt_sample(&sample("observe", "busy")),
+            "corrupt store: guard \"busy\""
+        );
+        assert!(corrupt_sample(&format!(
+            "{} INSERT INTO zone_samples VALUES (1794848400, 'Bad Zone', 0, NULL, NULL, NULL, NULL, 0, 0)",
+            sample("observe", "idle")
+        ))
+        .starts_with("corrupt store: zone id"));
+        assert_eq!(
+            corrupt_sample(&format!(
+                "{} INSERT INTO zone_samples VALUES (1794848460, 'bad', 0, NULL, NULL, NULL, NULL, 0, 0)",
+                sample("observe", "idle")
+            )),
+            "corrupt store: zone sample at 1794848460 has no sample"
+        );
+        assert!(corrupt_sample(&format!(
+            "{} INSERT INTO zone_samples VALUES (1794848400, 'bad', 0, 'x', NULL, NULL, NULL, 0, 0)",
+            sample("observe", "idle")
+        ))
+        .starts_with("sqlite: "));
+        assert!(corrupt_sample(
+            "INSERT INTO samples VALUES (1794848400, 'observe', 'idle', NULL, 'x', NULL, 5, 4.7)"
+        )
+        .starts_with("sqlite: "));
     }
 
     #[test]
@@ -789,9 +1306,31 @@ mod tests {
         }
         assert!(s.load(ts(SINCE)).is_err());
         assert!(s.events(None, 1).is_err());
-        assert!(s.zone_hours(ts(SINCE)).is_err());
+        assert!(s.zone_hours(Timestamp::MIN, Timestamp::MAX).is_err());
+        assert!(s.hours(Timestamp::MIN, Timestamp::MAX).is_err());
+        assert!(s.events_between(Timestamp::MIN, Timestamp::MAX, 1).is_err());
         assert!(s.prune_events(ts(SINCE)).is_err());
         s.conn.execute_batch("DROP TABLE schema_version").unwrap();
         assert!(s.schema_version().is_err());
+    }
+
+    #[test]
+    fn failing_sample_writes_and_reads_surface_as_errors() {
+        let failing = |drop: &str, st: Status| {
+            let mut s = SqliteStore::open_in_memory().unwrap();
+            s.conn.execute_batch(drop).unwrap();
+            let write = s.apply(&[Output::PublishStatus(Box::new(st))]).is_err();
+            let read = s.samples(Timestamp::MIN, Timestamp::MAX).is_err();
+            (write, read)
+        };
+        let st = status("2026-11-15T17:20:00Z");
+        assert_eq!(failing("DROP TABLE samples", st.clone()), (true, true));
+        assert_eq!(failing("DROP TABLE zone_samples", st.clone()), (true, true));
+        // Without zones the insert succeeds and pruning trips over the missing table.
+        let no_zones = Status {
+            zones: vec![],
+            ..st
+        };
+        assert_eq!(failing("DROP TABLE zone_samples", no_zones), (true, true));
     }
 }

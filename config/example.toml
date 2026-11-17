@@ -31,14 +31,20 @@ keep_alive_secs = 30
 # password = ""
 
 [http]
-# Address and port of the HTTP server (/healthz, /metrics, /api/state, /api/events).
+# Address and port of the HTTP server: the history page at /, plus /healthz, /metrics,
+# /api/state, /api/events, /api/day and /api/month.
 # 0.0.0.0 listens on all interfaces, which is what a Docker port mapping needs.
 listen = "0.0.0.0:8080"
 
 [store]
-# Path of the SQLite database holding hourly energy, learned zone state, overrides, the mode
-# and the event log. It is created on first start; in Docker it lives on the /data volume.
+# Path of the SQLite database holding hourly energy, learned zone state, overrides, the mode,
+# the event log and the samples for the history graphs. It is created on first start; in
+# Docker it lives on the /data volume.
 path = "/data/energybrain.db"
+# Days to keep the 1-minute samples behind the history page's minute graphs (power, the hour
+# budget, setpoints, sheds). About 0.5 MB a day. Older days still show their hourly energy and
+# every event; only the minute curves are gone. At least 1.
+sample_retention_days = 90
 
 [meter]
 # Topic the Tibber Pulse publishes raw HAN frames to: power every 2.5 s and 10 s, and the

@@ -35,7 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The dev database is fresh each run (`just dev` deletes it); seed the starting mode.
     std::fs::create_dir_all(config.store_path.parent().unwrap_or(Path::new(".")))?;
-    let mut store = SqliteStore::open(&config.store_path)?;
+    let mut store =
+        SqliteStore::open(&config.store_path)?.with_sample_retention(config.sample_retention);
     let seed: Vec<Output> = sim
         .initial_mode
         .map(Output::PersistMode)

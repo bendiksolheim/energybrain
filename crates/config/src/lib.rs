@@ -124,6 +124,8 @@ pub struct Config {
     pub http_listen: SocketAddr,
     /// SQLite database file.
     pub store_path: PathBuf,
+    /// How long the 1-minute samples for the history graphs are kept.
+    pub sample_retention: SignedDuration,
     /// Everything the engine needs.
     pub engine: EngineConfig,
 }
@@ -218,12 +220,14 @@ impl Default for RawHttp {
 #[serde(deny_unknown_fields, default)]
 struct RawStore {
     path: PathBuf,
+    sample_retention_days: u32,
 }
 
 impl Default for RawStore {
     fn default() -> Self {
         Self {
             path: PathBuf::from("energybrain.db"),
+            sample_retention_days: 90,
         }
     }
 }
@@ -428,6 +432,11 @@ impl Raw {
             .listen
             .parse()
             .map_err(|e| invalid("http.listen", format!("{e}")))?;
+        if self.store.sample_retention_days == 0 {
+            return Err(invalid("store.sample_retention_days", "must be at least 1"));
+        }
+        let sample_retention =
+            SignedDuration::from_hours(i64::from(self.store.sample_retention_days) * 24);
         let tariff = validate_tariff(&self.tariff.tiers)?;
         let target_kw = self.tariff.target_kw;
         if !tariff
@@ -503,6 +512,7 @@ impl Raw {
             mqtt: mqtt.0,
             http_listen,
             store_path: self.store.path,
+            sample_retention,
             engine: EngineConfig {
                 calendar: LocalCalendar::new(tz),
                 tariff,
@@ -655,6 +665,7 @@ mod tests {
         assert_eq!(c.topics.prefix, "energybrain");
         assert_eq!(c.http_listen, "0.0.0.0:8080".parse().unwrap());
         assert_eq!(c.store_path, PathBuf::from("/data/energybrain.db"));
+        assert_eq!(c.sample_retention, SignedDuration::from_hours(90 * 24));
         let e = &c.engine;
         assert_eq!(e.calendar.time_zone().iana_name(), Some("Europe/Oslo"));
         assert_eq!(e.target, Kw::new(5.0));
@@ -716,6 +727,7 @@ mod tests {
         assert_eq!(c.mqtt.keep_alive, SignedDuration::from_secs(30));
         assert_eq!(c.http_listen, "0.0.0.0:8080".parse().unwrap());
         assert_eq!(c.store_path, PathBuf::from("energybrain.db"));
+        assert_eq!(c.sample_retention, SignedDuration::from_hours(90 * 24));
         assert_eq!(
             c.engine.calendar.time_zone().iana_name(),
             Some("Europe/Oslo")
@@ -803,6 +815,11 @@ mod tests {
             "http.listen: ",
         ),
         ("topic = \"tibber\"", "topic = \"\"", "meter.topic: "),
+        (
+            "sample_retention_days = 90",
+            "sample_retention_days = 0",
+            "store.sample_retention_days: must be at least 1",
+        ),
         (
             "target_kw = 5",
             "target_kw = 6",

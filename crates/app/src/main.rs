@@ -22,7 +22,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|| std::env::var("ENERGYBRAIN_CONFIG").ok())
         .unwrap_or_else(|| "config/example.toml".to_owned());
     let config = energybrain_config::load(path.as_ref(), &|k| std::env::var(k).ok())?;
-    let store = SqliteStore::open(&config.store_path)?;
+    let store =
+        SqliteStore::open(&config.store_path)?.with_sample_retention(config.sample_retention);
     let events = sqlite_events(config.store_path.clone());
     let listener = tokio::net::TcpListener::bind(config.http_listen).await?;
     let mut terminate = signal(SignalKind::terminate())?;

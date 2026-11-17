@@ -261,6 +261,77 @@ pub struct ZoneStatus {
     pub heating_kw: Option<Kw>,
 }
 
+/// A snapshot of [`Status`] kept for the history graphs (taken about once a minute).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sample {
+    /// When the status was computed.
+    pub at: Timestamp,
+    /// Mode.
+    pub mode: Mode,
+    /// Guard state.
+    pub guard: GuardStatus,
+    /// Moving-average power.
+    pub power: Option<Kw>,
+    /// Energy used so far in the running hour.
+    pub used: Kwh,
+    /// Projection for the hour.
+    pub projected: Option<Kwh>,
+    /// The hour's allowed energy, before the safety margin.
+    pub allowed: Kwh,
+    /// What the guard acts on.
+    pub limit: Kwh,
+    /// Per-zone part, in status order.
+    pub zones: Vec<ZoneSample>,
+}
+
+/// One zone's part of a [`Sample`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZoneSample {
+    /// Zone.
+    pub id: ZoneId,
+    /// The user's setpoint.
+    pub base: Option<Celsius>,
+    /// What the thermostat reports.
+    pub reported: Option<Celsius>,
+    /// What the engine wants.
+    pub decision: Option<Celsius>,
+    /// Last reported power.
+    pub power: Option<Kw>,
+    /// Whether the guard sheds it.
+    pub shed: bool,
+    /// Whether a manual override is active.
+    pub overridden: bool,
+}
+
+impl Sample {
+    /// The parts of `status` worth graphing.
+    pub fn of(status: &Status) -> Self {
+        Self {
+            at: status.at,
+            mode: status.mode,
+            guard: status.guard,
+            power: status.power,
+            used: status.used,
+            projected: status.projected,
+            allowed: status.limit.allowed,
+            limit: status.limit.effective,
+            zones: status
+                .zones
+                .iter()
+                .map(|z| ZoneSample {
+                    id: z.id.clone(),
+                    base: z.base,
+                    reported: z.reported,
+                    decision: z.decision,
+                    power: z.power,
+                    shed: z.shed,
+                    overridden: z.override_until.is_some(),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use jiff::civil::date;
@@ -282,10 +353,9 @@ mod tests {
         serde_json::to_string_pretty(v).unwrap()
     }
 
-    #[test]
-    fn status_json() {
+    fn status() -> Status {
         let hour = HourStart::containing(ts("2026-11-15T17:00:00Z"));
-        let status = Status {
+        Status {
             at: ts("2026-11-15T17:20:00Z"),
             mode: Mode::Observe,
             guard: GuardStatus::Shedding,
@@ -330,10 +400,44 @@ mod tests {
                 power: Some(Kw::new(1.5)),
                 heating_kw: Some(Kw::new(1.45)),
             }],
-        };
+        }
+    }
+
+    #[test]
+    fn status_json() {
+        let status = status();
         insta::assert_snapshot!(json(&status));
         let tier_bound = json(&LimitBasis::TierBound);
         assert_eq!(tier_bound, "{\n  \"type\": \"tier_bound\"\n}");
+    }
+
+    #[test]
+    fn a_sample_keeps_what_the_graphs_need() {
+        let mut status = status();
+        status.zones[0].override_until = Some(ts("2026-11-15T19:00:00Z"));
+        let sample = Sample::of(&status);
+        assert_eq!(
+            sample,
+            Sample {
+                at: ts("2026-11-15T17:20:00Z"),
+                mode: Mode::Observe,
+                guard: GuardStatus::Shedding,
+                power: Some(Kw::new(6.1)),
+                used: Kwh::new(1.5),
+                projected: Some(Kwh::new(5.2)),
+                allowed: Kwh::new(7.0),
+                limit: Kwh::new(6.7),
+                zones: vec![ZoneSample {
+                    id: zone(),
+                    base: Some(Celsius::new(26.5)),
+                    reported: Some(Celsius::new(26.5)),
+                    decision: Some(Celsius::new(22.5)),
+                    power: Some(Kw::new(1.5)),
+                    shed: true,
+                    overridden: true,
+                }],
+            }
+        );
     }
 
     #[test]

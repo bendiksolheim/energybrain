@@ -82,6 +82,33 @@ pub enum GuardStatus {
     Disabled,
 }
 
+impl GuardStatus {
+    /// Every state, in declaration order.
+    pub const ALL: [Self; 5] = [
+        Self::Idle,
+        Self::Shedding,
+        Self::LimitUnreachable,
+        Self::MeterStale,
+        Self::Disabled,
+    ];
+
+    /// The wire name, as in JSON (`idle`, `shedding`, `limit_unreachable`, …).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Shedding => "shedding",
+            Self::LimitUnreachable => "limit_unreachable",
+            Self::MeterStale => "meter_stale",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    /// Parses a wire name.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|g| g.as_str() == s)
+    }
+}
+
 /// Why a zone was released.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -449,6 +476,18 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn guard_status_names_round_trip_and_match_json() {
+        for g in GuardStatus::ALL {
+            assert_eq!(GuardStatus::parse(g.as_str()), Some(g));
+            assert_eq!(
+                serde_json::to_string(&g).unwrap(),
+                format!("\"{}\"", g.as_str())
+            );
+        }
+        assert_eq!(GuardStatus::parse("busy"), None);
     }
 
     #[test]

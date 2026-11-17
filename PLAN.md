@@ -40,8 +40,9 @@ few weeks before going live.
 - Heat-pump coordination
 - Monthly 5 000 kWh Norgespris cap and spot-price fallback
 - Model-based optimiser (LP via `good_lp` + `microlp`)
-- Custom web UI and a metrics stack (user runs none; observe mode is reviewed through
-  `/api/events` and `/api/state`; `/metrics` is kept so Grafana can be added later)
+- A metrics stack (user runs none). Observe mode is reviewed through the built-in history
+  page (§8), `/api/events` and `/api/state`; `/metrics` is kept so Grafana can be added
+  later
 
 ---
 
@@ -66,9 +67,10 @@ typed `Input`s and typed `Output`s back into side effects.
                                                   │ Output
                        ┌──────────────────────────┼───────────────────────┐
                        ▼                          ▼                       ▼
-                 SQLite store              mqtt adapter            /metrics, /api/state
-            (hourly kWh, overrides,                                (axum) → VictoriaMetrics
-             last written setpoints)                                       → Grafana
+                 SQLite store              mqtt adapter            /metrics, /api/state,
+            (hourly kWh, overrides,                                /api/day, /api/month,
+             last written setpoints,                               / (history page, §8)
+             1-minute samples)                                     (axum)
 ```
 
 ### Cargo workspace layout
@@ -90,7 +92,7 @@ energybrain/                     (repo root = the folder Claude Code starts in)
 │   │                                  Input/Output translation, Easy MQTT topics
 │   ├── han/       energybrain-han     pure Kaifa HDLC/DLMS frame parser (Tibber Pulse raw)
 │   ├── store/     energybrain-store   rusqlite (bundled) persistence behind a trait
-│   ├── http/      energybrain-http    axum: /healthz, /metrics, /api/state
+│   ├── http/      energybrain-http    axum: /healthz, /metrics, /api/*, history page
 │   ├── app/       energybrain         binary: runtime loop (lib.rs) + main.rs plumbing
 │   └── sim/       energybrain-sim     dev only: simulated house (meter, thermostats,
 │                                      loads) + `energybrain-sim` binary, see §7
@@ -313,7 +315,9 @@ sane, topics non-empty. Errors are typed and point at the offending key.
   (mode, shed_allowed per zone), `zone_hourly_energy(zone TEXT, hour_start_utc INTEGER,
   kwh REAL, PK(zone, hour_start_utc))`, `zone_stats(zone TEXT PK, heating_kw REAL)`,
   `events(id INTEGER PK, at INTEGER, kind TEXT, zone TEXT NULL, detail TEXT)` (`SqliteStore::prune_events` exists but is not scheduled in phase 1: a few
-  dozen events a day is negligible). Schema migrations run on open, with a
+  dozen events a day is negligible). Migration 2 adds `samples` and `zone_samples`
+  (1-minute status snapshots for the history page, pruned after a retention period, §8).
+  Schema migrations run on open, with a
   `schema_version` table.
 - Daily peaks are **derived** from `hourly_energy`, not stored separately.
 - Tested against in-memory and tempfile databases.
@@ -487,7 +491,7 @@ switch the HomeKit switch to active.
 | 5 000 kWh Norgespris cap | Monthly kWh already derivable from `hourly_energy`. Add a spot-price adapter and a policy activated above the cap |
 | EV charger (Easee Charge Lite) | New adapter crate for Easee's cloud API, a controllable load with a current cap; `PeakGuard` treats it as a sheddable load before floors |
 | Optimiser (F) | `energybrain-planner` crate using `good_lp` + `microlp`, producing a per-hour plan the `PlanPolicy` follows, still subject to `PeakGuard` caps |
-| Custom UI | Extend `energybrain-http` with endpoints and static assets |
+| Custom UI | Extend `energybrain-http` with endpoints and static assets (as the history page, §8, does) |
 
 Adding an `Input` variant or `ProposalKind` variant should cause compile errors at every
 place that must handle it. Don't use `_ =>` catch-alls on these enums.
@@ -694,3 +698,77 @@ Pure and fully unit-tested, with a snapshot of one simulated hour.
 `just dev-down`, `docs/dev.md` (how to run, control topics, reading `/api/state` and
 `/api/events` in simulated time), a README link, and CLAUDE.md (commands, decision log:
 the new crate, mosquitto in Apple containers for dev, no embedded broker in production).
+
+---
+
+## 8. History page (graphs instead of Grafana)
+
+Goal: see how usage and the guard's decisions played out over a day or a month, without
+running a metrics stack. `/api/state` only shows *now*, and the store only keeps hourly
+totals and events, so the minute-by-minute picture (power, the hour budget, setpoints,
+sheds) is lost. Grafana would have got it from VictoriaMetrics scraping `/metrics`.
+
+### Decisions
+- **Served by energybrain itself**, at `GET /`: one static HTML page, a small JS file and
+  [uPlot](https://github.com/leeoniya/uPlot) 1.6.32 (MIT, ~50 KB), all embedded in the
+  binary with `include_str!` and vendored in `crates/http/assets/` (with its licence), so
+  the page works without internet access and needs no new Rust dependency.
+- **Rust does the work, JS only draws.** Day boundaries (DST days have 23 or 25 hours),
+  per-hour limits, day peaks, the top 3 and the tier are computed in Rust and tested
+  under the coverage gate. The JS fetches JSON, maps it to uPlot series and handles
+  navigation; it has no logic worth testing. (SVG rendered in Rust was considered: fully
+  tested, but slower to build and without zoom/hover. The JSON endpoints stay the same
+  if the page is ever replaced.)
+- **Sample log.** The store records a sample of the status at most once per minute
+  (the first `PublishStatus` in each minute, in the app clock's time, so `just dev`
+  fills it in accelerated time): power, used, projection, limit (allowed and
+  effective), mode, guard state, and per zone base / reported / decision setpoint, power,
+  shed and override. Samples older than `store.sample_retention_days` (default 90, at
+  least 1) are pruned once an hour. ~0.5 MB/day for six zones.
+- Hourly energy, zone hourly energy and events are still **kept forever**: after the
+  retention period a day still shows its hourly bars and every decision, just not the
+  minute curves.
+- Sampling lives in the store (it handles `PublishStatus` in `apply`), not in core: a
+  snapshot for graphs is not a decision, and core stays unchanged apart from the plain
+  `Sample` data type (`Sample::of(&Status)`).
+- **Columnar JSON** for samples (`{"unit": "kW", "values": [...]}` per series, plus one
+  `at` array of RFC 3339 timestamps), which is what uPlot wants and ~5× smaller than one
+  object per sample with a `{value, unit}` per number.
+- Times in the page are shown in the configured time zone (uPlot's `tzDate`), not the
+  browser's.
+
+### Endpoints
+- `GET /api/day?date=YYYY-MM-DD` (default: today, local): `date`, `time_zone`, `from`,
+  `to`, `samples` (columnar, per zone too), `hours` (each local hour: energy, quality,
+  and the hour's allowed/effective limit from its last sample), `zone_hours`, `events`
+  (oldest first).
+- `GET /api/month?month=YYYY-MM` (default: this month): per local day its peak hour and
+  energy, its total, and its hourly values (for a day × hour heatmap); the top 3 days,
+  their average, the resulting tier and the target.
+- Bad dates are 400 with a JSON error, store failures 500, as for `/api/events`.
+
+### Page
+- Header: mode, guard state and the running hour (used / projected / limit), from
+  `/api/state`, refreshed every minute while today is shown.
+- **Day** (‹ date ›): hourly energy bars against the allowed limit (estimated hours
+  marked); house power with the floors' power stacked under it; the hour budget (used,
+  projection, effective limit); one small chart per zone with base, reported and decided
+  setpoint and shed periods shaded; the event list. Charts share the cursor; dragging, or
+  clicking an hour bar, zooms every minute chart to that range.
+- **Month** (‹ month ›): day-peak bars with the top 3 highlighted, the target and the
+  top-3 average as lines, the tier and its price, and a day × hour heatmap.
+
+### Milestones
+Each ends with `just check` green and a commit.
+
+**H1 — Sample log.** `Sample` in core, store migration 2 (`samples`, `zone_samples`),
+sampling and pruning in `SqliteStore::apply`, range queries for samples, hours, zone
+hours and events; `store.sample_retention_days` in the config.
+
+**H2 — Day and month APIs.** `/api/day`, `/api/month` in `energybrain-http`, built from a
+`HistoryQuery` that the app backs with SQLite; insta snapshots of both, including a DST
+day.
+
+**H3 — Page.** Vendored uPlot, `GET /` and `/assets/*`, the page, docs (`docs/docker.md`,
+`docs/dev.md`) and the CLAUDE.md decision log.
+
