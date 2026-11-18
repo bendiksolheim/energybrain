@@ -50,16 +50,16 @@ minute the house adds a line of its own:
 INFO energybrain_sim::driver: Tue 17:42 6.31 kW = floors 2.90 + background 1.47 + heat pump 1.00 + appliances 0.00 + ev 0.00 + extra 0.00; heating: bathroom, hallway, basement
 ```
 
-Open <http://127.0.0.1:8080/> for the history page. It follows the simulated clock: "today"
+Open <http://127.0.0.1:8082/> for the history page. It follows the simulated clock: "today"
 is the simulated day, and at 6× a minute sample arrives every 10 real seconds, so the minute
 graphs fill in while you watch (the page refreshes every real minute).
 
-The HTTP endpoints are on `127.0.0.1:8080`. All their timestamps are simulated time (UTC):
+The HTTP endpoints are on `127.0.0.1:8082`. All their timestamps are simulated time (UTC):
 
 ```sh
-curl -s localhost:8080/api/state | jq '{mode, guard, used, projected, limit, tier}'
-curl -s localhost:8080/api/state | jq '.zones[] | {id, base, decision, shed, reasons}'
-curl -s 'localhost:8080/api/events?limit=20' \
+curl -s localhost:8082/api/state | jq '{mode, guard, used, projected, limit, tier}'
+curl -s localhost:8082/api/state | jq '.zones[] | {id, base, decision, shed, reasons}'
+curl -s 'localhost:8082/api/events?limit=20' \
   | jq -r '.[] | [.at, .kind.type, (.kind.event.type // ""), (.kind.event.zone // .kind.zone // "")] | @tsv'
 ```
 

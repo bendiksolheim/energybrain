@@ -40,7 +40,7 @@ dev config="config/dev.toml" sim="config/sim.toml": dev-broker
 
 # (Re)start the dev broker: mosquitto in a container, empty every time
 dev-broker: _runtime-start dev-down
-    {{runtime}} run -d --name energybrain-mqtt -p 127.0.0.1:1883:1883 -v "{{justfile_directory()}}/deploy/dev/mosquitto:/mosquitto/config" eclipse-mosquitto:2
+    {{runtime}} run -d --name energybrain-mqtt -p 127.0.0.1:1884:1883 -v "{{justfile_directory()}}/deploy/dev/mosquitto:/mosquitto/config" eclipse-mosquitto:2
 
 # Stop and remove the dev broker
 dev-down:

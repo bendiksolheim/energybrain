@@ -6,11 +6,11 @@
 timezone = "Europe/Oslo"
 
 [mqtt]
-host = "127.0.0.1"   # mosquitto in an Apple container, started by `just dev`
-port = 1883
+host = "127.0.0.1"   # mosquitto in a container, started by `just dev`
+port = 1884          # host port; not 1883, so it can run next to a real mosquitto
 
 [http]
-listen = "127.0.0.1:8080"   # /api/state, /api/events, /metrics, /healthz
+listen = "127.0.0.1:8082"   # not 8080/8081 (zigbee2mqtt, energybrain); /api/state, /api/events, /metrics, /healthz
 
 [store]
 path = "target/dev/energybrain.db"   # deleted by `just dev` before every run

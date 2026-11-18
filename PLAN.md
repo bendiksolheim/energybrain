@@ -556,7 +556,7 @@ coverage gate and to keep its wire format in step with energybrain's parser, and
 ### Configuration
 Two files, so the production config schema (unknown keys rejected) stays free of dev keys:
 - `config/dev.toml`: a normal energybrain config, the same as `example.toml` except
-  `mqtt.host = "127.0.0.1"`, no credentials, `http.listen = "127.0.0.1:8080"`,
+  `mqtt.host = "127.0.0.1"`, no credentials, `mqtt.port = 1884`, `http.listen = "127.0.0.1:8082"` (off the usual ports, so dev runs next to a real mosquitto/energybrain),
   `store.path = "target/dev/energybrain.db"`. Committed (it holds no secrets).
 - `config/sim.toml`: parsed by the sim crate, with the same validation style as the
   energybrain config (typed errors naming the key, unknown keys rejected):
@@ -665,7 +665,7 @@ Two files, so the production config schema (unknown keys rejected) stays free of
 - `just dev`, which:
   1. with Apple `container`, runs `container system start` (does nothing if already running);
   2. removes any old `energybrain-mqtt` container;
-  3. runs `<runtime> run -d --name energybrain-mqtt -p 127.0.0.1:1883:1883`, with
+  3. runs `<runtime> run -d --name energybrain-mqtt -p 127.0.0.1:1884:1883`, with
      `deploy/dev/mosquitto` mounted as `/mosquitto/config`, using `eclipse-mosquitto:2`;
   4. removes `target/dev/energybrain.db*`;
   5. runs `cargo run -p energybrain-sim -- config/dev.toml config/sim.toml`.
