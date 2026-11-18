@@ -266,19 +266,24 @@ impl SqliteStore {
         rows.map(parse_event).collect()
     }
 
-    /// Stored events (as JSON) in `[from, to)`, oldest first, at most `limit`.
+    /// Stored events in `[from, to)` with their time, newest first, at most `limit` (so a cap
+    /// drops the oldest).
     pub fn events_between(
         &self,
         from: Timestamp,
         to: Timestamp,
         limit: usize,
-    ) -> Result<Vec<serde_json::Value>, StoreError> {
+    ) -> Result<Vec<(Timestamp, serde_json::Value)>, StoreError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(
-            "SELECT json FROM events WHERE at >= ?1 AND at < ?2 ORDER BY at, id LIMIT ?3",
+            "SELECT at, json FROM events WHERE at >= ?1 AND at < ?2
+             ORDER BY at DESC, id DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![from.as_second(), to.as_second(), limit], read_json)?;
-        rows.map(parse_event).collect()
+        let rows = stmt.query_map(
+            params![from.as_second(), to.as_second(), limit],
+            read_timed_json,
+        )?;
+        rows.map(timed_event).collect()
     }
 
     /// Hourly energy for hours starting in `[from, to)`, oldest first.
@@ -557,6 +562,17 @@ fn read_json(r: &Row<'_>) -> rusqlite::Result<String> {
 
 fn parse_event(json: rusqlite::Result<String>) -> Result<serde_json::Value, StoreError> {
     serde_json::from_str(&json?).map_err(|e| StoreError::Corrupt(format!("event json: {e}")))
+}
+
+fn read_timed_json(r: &Row<'_>) -> rusqlite::Result<(i64, String)> {
+    Ok((r.get(0)?, r.get(1)?))
+}
+
+fn timed_event(
+    row: rusqlite::Result<(i64, String)>,
+) -> Result<(Timestamp, serde_json::Value), StoreError> {
+    let (at, json) = row?;
+    Ok((timestamp(at)?, parse_event(Ok(json))?))
 }
 
 struct SampleRow {
@@ -1146,17 +1162,19 @@ mod tests {
             .unwrap();
         let kinds: Vec<&str> = events
             .iter()
-            .map(|e| e["kind"]["type"].as_str().unwrap())
+            .map(|(_, e)| e["kind"]["type"].as_str().unwrap())
             .collect();
         assert_eq!(
             kinds,
-            ["guard", "guard", "override"],
-            "oldest first, end excluded"
+            ["override", "guard", "guard"],
+            "newest first, end excluded"
         );
-        assert_eq!(
-            s.events_between(Timestamp::MIN, Timestamp::MAX, 1).unwrap()[0]["at"],
-            "2026-11-15T17:20:00Z"
-        );
+        for (at, e) in &events {
+            assert_eq!(e["at"], at.to_string(), "the time is the event's own");
+        }
+        let (at, newest) = &s.events_between(Timestamp::MIN, Timestamp::MAX, 1).unwrap()[0];
+        assert_eq!(newest["at"], at.to_string(), "a cap keeps the newest");
+        assert!(*at > ts("2026-11-15T17:43:00Z"));
     }
 
     #[test]

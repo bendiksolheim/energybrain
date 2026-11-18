@@ -1,6 +1,6 @@
 ---
 source: crates/http/src/history.rs
-assertion_line: 679
+assertion_line: 733
 expression: json(&view)
 ---
 {
@@ -419,9 +419,42 @@ expression: json(&view)
       }
     ]
   },
-  "events": [
+  "event_hours": [
     {
-      "at": "2026-11-15T16:59:00Z"
+      "hour": 18,
+      "start": "2026-11-15T17:00:00Z",
+      "end": "2026-11-15T18:00:00Z",
+      "over_limit": false,
+      "events": [
+        {
+          "at": "2026-11-15T17:05:30Z"
+        },
+        {
+          "at": "2026-11-15T17:05:00Z"
+        }
+      ]
+    },
+    {
+      "hour": 17,
+      "start": "2026-11-15T16:00:00Z",
+      "end": "2026-11-15T17:00:00Z",
+      "over_limit": false,
+      "events": [
+        {
+          "at": "2026-11-15T16:59:00Z"
+        }
+      ]
+    },
+    {
+      "hour": 16,
+      "start": "2026-11-15T15:00:00Z",
+      "end": "2026-11-15T16:00:00Z",
+      "over_limit": false,
+      "events": [
+        {
+          "at": "2026-11-15T15:30:00Z"
+        }
+      ]
     }
   ]
 }

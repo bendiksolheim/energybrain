@@ -322,17 +322,24 @@ function renderDay(d) {
     }
   }
 
-  // Events.
-  const rows = d.events.map((e) => {
-    const [what, zone, detail] = describe(e);
-    const t = secs(e.at);
-    return { cells: [hm(t), what, zone || "–", detail], t };
-  });
-  const evTable = rows.length
-    ? table(["Time", "What", "Zone", "Details"], rows.map((r) => r.cells), [], (i) =>
-      zoomTo([rows[i].t - 1800, rows[i].t + 1800]))
-    : el("div", { class: "empty" }, "No events this day.");
-  $("t-events").replaceChildren(evTable);
+  // Events, newest hour first, each under a header with the hour's energy.
+  $("t-events").replaceChildren(d.event_hours.length
+    ? eventTable(d.event_hours.map((g) => {
+      const from = secs(g.start), to = secs(g.end);
+      const n = g.events.length;
+      return {
+        title: `${hm(from)}–${hm(to)}`,
+        summary: `${num(h.energy.values[g.hour], 2)} / ${num(h.limit.values[g.hour], 2)} kWh · ${n} ${n === 1 ? "event" : "events"}`,
+        over: g.over_limit,
+        range: [from, to],
+        rows: g.events.map((e) => {
+          const [what, zone, detail] = describe(e);
+          const t = secs(e.at);
+          return { cells: [hm(t), what, zone || "–", detail], range: [t - 1800, t + 1800] };
+        }),
+      };
+    }))
+    : el("div", { class: "empty" }, "No events this day."));
   zoomTo(view.zoom);
 }
 
@@ -374,6 +381,22 @@ function table(head, rows, numeric = [], onRow = null) {
     el("tbody", {}, ...rows.map((r, ri) => el("tr", onRow ? { class: "clickable", onclick: () => onRow(ri) } : {},
       ...r.map((c, i) => el("td", numeric.includes(i) ? { class: "num" } : {}, String(c)))))));
   return el("div", { class: "table-wrap" }, t);
+}
+
+/** The events table: one header row per hour, its events below. Every row zooms on click. */
+function eventTable(groups) {
+  const head = ["Time", "What", "Zone", "Details"];
+  const row = (cls, range, cells) => el("tr", { class: cls, onclick: () => zoomTo(range) }, ...cells);
+  const body = groups.flatMap((g) => [
+    row(g.over ? "clickable hour over" : "clickable hour", g.range, [
+      el("td", {}, g.title),
+      el("td", { colspan: "3" }, g.summary, g.over ? el("span", { class: "flag" }, "over the limit") : null),
+    ]),
+    ...g.rows.map((r) => row("clickable", r.range, r.cells.map((c) => el("td", {}, String(c))))),
+  ]);
+  return el("div", { class: "table-wrap" }, el("table", { class: "events" },
+    el("thead", {}, el("tr", {}, ...head.map((h) => el("th", {}, h)))),
+    el("tbody", {}, ...body)));
 }
 
 // ---- month ----------------------------------------------------------------------------

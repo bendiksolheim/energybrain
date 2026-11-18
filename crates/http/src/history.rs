@@ -31,8 +31,8 @@ pub struct History {
     pub hours: Vec<HourEnergy>,
     /// Hourly energy per zone.
     pub zone_hours: Vec<(ZoneId, HourStart, Kwh)>,
-    /// Stored events (JSON), oldest first.
-    pub events: Vec<serde_json::Value>,
+    /// Stored events (JSON) with their time, newest first.
+    pub events: Vec<(Timestamp, serde_json::Value)>,
 }
 
 /// How much of the history a view needs.
@@ -120,7 +120,22 @@ pub struct DayView {
     pub hours: HourColumns,
     /// The sample log, with gaps marked.
     pub samples: SampleColumns,
-    /// The day's events, oldest first.
+    /// The day's events grouped by hour, newest hour first. Hours without events are left out.
+    pub event_hours: Vec<EventHour>,
+}
+
+/// One hour's events.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EventHour {
+    /// Index into [`DayView::hours`], for the hour's energy and limit.
+    pub hour: usize,
+    /// Hour start.
+    pub start: Timestamp,
+    /// Hour end.
+    pub end: Timestamp,
+    /// Whether the hour's energy went over the limit the guard acted on.
+    pub over_limit: bool,
+    /// The events, newest first.
     pub events: Vec<serde_json::Value>,
 }
 
@@ -291,16 +306,49 @@ pub fn day_view(
         std::iter::successors(Some(HourStart::containing(from)), |h| Some(h.next()))
             .take_while(|h| h.start() < to)
             .collect();
+    let columns = hour_columns(site, &hours, &history);
     DayView {
         date,
         today,
         time_zone: site.time_zone(),
         from,
         to,
-        hours: hour_columns(site, &hours, &history),
+        event_hours: event_hours(&hours, &columns, history.events),
+        hours: columns,
         samples: sample_columns(site, &history.samples),
-        events: history.events,
     }
+}
+
+/// Groups events (newest first) by the hour they fall in, keeping that order.
+fn event_hours(
+    hours: &[HourStart],
+    columns: &HourColumns,
+    events: Vec<(Timestamp, serde_json::Value)>,
+) -> Vec<EventHour> {
+    let mut groups: Vec<EventHour> = Vec::new();
+    for (at, event) in events {
+        // The store only returns events inside the day, so `at` is never before the first
+        // hour; saturating keeps this total anyway.
+        let hour = hours.partition_point(|h| h.start() <= at).saturating_sub(1);
+        match groups.last_mut() {
+            Some(g) if g.hour == hour => g.events.push(event),
+            _ => {
+                // `hours` covers the whole day (23–25 entries), and the columns have one
+                // value per hour, so `hour` is in range.
+                let start = hours[hour];
+                groups.push(EventHour {
+                    hour,
+                    start: start.start(),
+                    end: start.next().start(),
+                    over_limit: columns.energy.values[hour]
+                        .zip(columns.limit.values[hour])
+                        .is_some_and(|(e, l)| e > l),
+                    events: vec![event],
+                });
+            }
+        }
+    }
+    groups
 }
 
 fn hour_columns(site: &Site, hours: &[HourStart], history: &History) -> HourColumns {
@@ -595,7 +643,13 @@ pub(crate) mod tests {
                     Kwh::new(9.0),
                 ),
             ],
-            events: vec![serde_json::json!({ "at": "2026-11-15T16:59:00Z" })],
+            // Newest first, as the store returns them.
+            events: ["17:05:30", "17:05:00", "16:59:00", "15:30:00"]
+                .map(|t| {
+                    let at = format!("2026-11-15T{t}Z");
+                    (ts(&at), serde_json::json!({ "at": at }))
+                })
+                .to_vec(),
         }
     }
 
@@ -687,6 +741,67 @@ pub(crate) mod tests {
         assert_eq!(view.hours.start[3], ts("2026-10-25T01:00:00Z"));
         assert_eq!(view.samples.at, Vec::<Timestamp>::new());
         assert_eq!(view.hours.energy.values, vec![None; 25]);
+    }
+
+    #[test]
+    fn events_are_grouped_by_hour_newest_first() {
+        let mut history = day_history();
+        history.hours[1].kwh = Kwh::new(4.8);
+        let view = view_of_day(date(2026, 11, 15), history);
+        let groups: Vec<_> = view
+            .event_hours
+            .iter()
+            .map(|g| (g.hour, g.start, g.end, g.over_limit, g.events.len()))
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                // 18:00 local, 1.2 kWh of 4.7.
+                (
+                    18,
+                    ts("2026-11-15T17:00:00Z"),
+                    ts("2026-11-15T18:00:00Z"),
+                    false,
+                    2
+                ),
+                // 4.8 kWh against a 4.7 kWh limit.
+                (
+                    17,
+                    ts("2026-11-15T16:00:00Z"),
+                    ts("2026-11-15T17:00:00Z"),
+                    true,
+                    1
+                ),
+                // Energy known, but no sample, so no limit to compare with.
+                (
+                    16,
+                    ts("2026-11-15T15:00:00Z"),
+                    ts("2026-11-15T16:00:00Z"),
+                    false,
+                    1
+                ),
+            ]
+        );
+        assert_eq!(view.event_hours[0].events[0]["at"], "2026-11-15T17:05:30Z");
+    }
+
+    #[test]
+    fn events_in_the_repeated_fall_back_hour_stay_apart() {
+        let at = |s: &str| (ts(s), serde_json::json!({ "at": s }));
+        let history = History {
+            events: vec![at("2026-10-25T01:10:00Z"), at("2026-10-25T00:10:00Z")],
+            ..History::default()
+        };
+        let view = view_of_day(date(2026, 10, 25), history);
+        let hours: Vec<_> = view.event_hours.iter().map(|g| (g.hour, g.start)).collect();
+        // Both are 02:10 local, in the first and the second 02:00 hour.
+        assert_eq!(
+            hours,
+            [
+                (3, ts("2026-10-25T01:00:00Z")),
+                (2, ts("2026-10-25T00:00:00Z"))
+            ]
+        );
     }
 
     #[test]

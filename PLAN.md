@@ -742,8 +742,10 @@ sheds) is lost. Grafana would have got it from VictoriaMetrics scraping `/metric
 ### Endpoints
 - `GET /api/day?date=YYYY-MM-DD` (default: today, local): `date`, `time_zone`, `from`,
   `to`, `samples` (columnar, per zone too), `hours` (each local hour: energy, quality,
-  and the hour's allowed/effective limit from its last sample), `zone_hours`, `events`
-  (oldest first).
+  and the hour's allowed/effective limit from its last sample), `zone_hours`, `event_hours`
+  (the events grouped by local hour, newest hour and newest event first, hours without
+  events left out; each with its index into `hours`, start/end and whether its energy went
+  over the limit).
 - `GET /api/month?month=YYYY-MM` (default: this month): per local day its peak hour and
   energy, its total, and its hourly values (for a day × hour heatmap); the top 3 days,
   their average, the resulting tier and the target.
@@ -755,7 +757,9 @@ sheds) is lost. Grafana would have got it from VictoriaMetrics scraping `/metric
 - **Day** (‹ date ›): hourly energy bars against the allowed limit (estimated hours
   marked); house power with the floors' power stacked under it; the hour budget (used,
   projection, effective limit); one small chart per zone with base, reported and decided
-  setpoint and shed periods shaded; the event list. Charts share the cursor; dragging, or
+  setpoint and shed periods shaded; the event list, newest first, under one header per
+  hour (energy / limit, event count, flagged when over the limit; clicking it zooms to
+  the hour). Charts share the cursor; dragging, or
   clicking an hour bar, zooms every minute chart to that range.
 - **Month** (‹ month ›): day-peak bars with the top 3 highlighted, the target and the
   top-3 average as lines, the tier and its price, and a day × hour heatmap.
