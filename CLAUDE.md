@@ -8,10 +8,10 @@ keep it up to date if a decision changes.
 - `just test` — `cargo test --workspace --all-features`
 - `just cov` — `cargo llvm-cov --workspace --all-features --fail-under-lines 100 --ignore-filename-regex '(^|/)main\.rs$'`
 - `just run` — run locally with `config/example.toml`
-- `just dev` — energybrain + simulated house on accelerated time, against mosquitto in an Apple
-  container (`just dev-down` stops it; `just sim <control> <value>`, `just dev-pub`, `just dev-sub`
-  poke and watch it). See `docs/dev.md`. The user runs these; `container` doesn't work in the
-  Claude Code sandbox.
+- `just dev` — energybrain + simulated house on accelerated time, against mosquitto in a
+  container: Apple `container` on macOS, Docker elsewhere, `EB_RUNTIME=docker|container`
+  overrides (`just dev-down` stops it; `just sim <control> <value>`, `just dev-pub`, `just dev-sub`
+  poke and watch it). See `docs/dev.md`. The user runs these.
 
 ## Non-negotiables
 - **100 % line coverage**, enforced. The only excluded file is `crates/app/src/main.rs`, which holds plumbing only. No coverage-exclusion attributes, no `cfg(coverage)`. If something can't be tested, refactor it.
@@ -161,8 +161,8 @@ keep it up to date if a decision changes.
   HTTP server are stopped.
 - Deployment: `deploy/Dockerfile` (rust:1.100 build → distroless cc nonroot, `/data` volume,
   `/config/energybrain.toml`), `deploy/docker-compose.yml` (credentials from `deploy/.env`,
-  both gitignored). The image can't be built locally (no Docker on the dev Mac), so CI builds
-  it. jiff's `tzdb-bundle-always` embeds the tz database so `Europe/Oslo` resolves in distroless.
+  both gitignored). CI builds the image; locally `just docker` works only where Docker is
+  installed (the Linux dev machine, not the Mac). jiff's `tzdb-bundle-always` embeds the tz database so `Europe/Oslo` resolves in distroless.
 - Releases: publishing a GitHub release runs `.github/workflows/release.yml`, which reuses
   `ci.yml` (`workflow_call`) as a gate, then pushes `deploy/Dockerfile` (amd64 only) to Docker Hub
   as `<DOCKER_USERNAME>/energybrain`. Releases are plain integers (user decision, no semver):
@@ -185,7 +185,11 @@ keep it up to date if a decision changes.
   shutting down right after a shed write saw the stale pre-write report equal to the base and
   skipped the restore, leaving the zone shed (flaky e2e test on CI).
 - Local dev (PLAN.md §7): production keeps mosquitto (no embedded broker); dev runs mosquitto
-  in an Apple container and an in-process simulated house on an accelerated clock.
+  in a container and an in-process simulated house on an accelerated clock.
+- Dev runtime (user decision): the justfile supports both Apple `container` (default on macOS)
+  and Docker (default elsewhere; the dev machine is now also Linux), chosen by `os()` and
+  overridable with `EB_RUNTIME`. The only differences are `container system start` and
+  `delete` vs `rm`.
 - S1: `energybrain_han::encode` is the exact inverse of `parse` (it reproduces the real fixtures
   byte for byte). To make that possible `parse` now returns every value in the lists (Q±,
   per-phase currents/voltages as `Phases::One`/`Three`, R±), with new units `Kvar`, `Kvarh`,

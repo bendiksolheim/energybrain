@@ -10,9 +10,15 @@ check that the guard is correct: the scenario tests in `crates/core/src/scenario
 
 ## Before the first run
 
-You need Apple's [`container`](https://github.com/apple/container) CLI (1.0 or later); the
-dev broker is mosquitto in a container. The first `container system start` may ask to
-install a kernel.
+The dev broker is mosquitto in a container, so you need a container runtime:
+
+- **macOS:** Apple's [`container`](https://github.com/apple/container) CLI (1.0 or later).
+  The first `container system start` may ask to install a kernel.
+- **Linux:** Docker, with your user in the `docker` group.
+
+The recipes use `container` on macOS and `docker` everywhere else. To use Docker on a Mac
+(Docker Desktop, OrbStack), set `EB_RUNTIME=docker`, e.g. `EB_RUNTIME=docker just dev`;
+it applies to every recipe below.
 
 ## Running
 

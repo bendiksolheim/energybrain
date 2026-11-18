@@ -514,8 +514,8 @@ coverage gate and to keep its wire format in step with energybrain's parser, and
 - **Production keeps mosquitto.** Embedding a broker (rmqtt/rumqttd) in energybrain would
   make every release or crash take down the house's MQTT bus (Z-Wave JS UI, Homebridge,
   Tibber Pulse), and would put broker code under the coverage gate. Rejected.
-- **Dev broker: mosquitto in an Apple container** (`container` CLI 1.0; Docker isn't
-  installed). It's the same broker as production, needs no broker code, and is started by
+- **Dev broker: mosquitto in a container**: Apple `container` (CLI 1.0) on macOS, Docker
+  on Linux, overridable with `EB_RUNTIME`. It's the same broker as production, needs no broker code, and is started by
   `just dev`. It runs anonymous and **without persistence**, and `just dev` recreates it
   every run, so retained topics from an earlier run (mode, setpoints, other simulated
   times) never leak into the next one.
@@ -663,9 +663,9 @@ Two files, so the production config schema (unknown keys rejected) stays free of
 
 ### just recipes
 - `just dev`, which:
-  1. runs `container system start` (does nothing if already running);
+  1. with Apple `container`, runs `container system start` (does nothing if already running);
   2. removes any old `energybrain-mqtt` container;
-  3. runs `container run -d --name energybrain-mqtt -p 127.0.0.1:1883:1883`, with
+  3. runs `<runtime> run -d --name energybrain-mqtt -p 127.0.0.1:1883:1883`, with
      `deploy/dev/mosquitto` mounted as `/mosquitto/config`, using `eclipse-mosquitto:2`;
   4. removes `target/dev/energybrain.db*`;
   5. runs `cargo run -p energybrain-sim -- config/dev.toml config/sim.toml`.
@@ -674,7 +674,7 @@ Two files, so the production config schema (unknown keys rejected) stays free of
   harmless.
 - `just dev-down`: stops and removes the broker container.
 - `just sim <control> <value>` publishes `sim/<control>/set`, `just dev-pub <topic> <value>`
-  anything, and `just dev-sub [topic]` watches the broker, all through `container exec` into the
+  anything, and `just dev-sub [topic]` watches the broker, all through `<runtime> exec` into the
   broker container (no local mosquitto clients needed).
 - To verify in S5: whether Apple `container` can mount a single file. The plan mounts
   the directory to avoid depending on that.
