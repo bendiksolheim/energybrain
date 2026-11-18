@@ -10,7 +10,9 @@ host = "127.0.0.1"   # mosquitto in a container, started by `just dev`
 port = 1884          # host port; not 1883, so it can run next to a real mosquitto
 
 [http]
-listen = "127.0.0.1:8082"   # not 8080/8081 (zigbee2mqtt, energybrain); /api/state, /api/events, /metrics, /healthz
+# All interfaces, so the history page can be opened from another machine on the LAN (it is
+# read-only). Port 8082, not 8080/8081, so it runs next to a real energybrain.
+listen = "0.0.0.0:8082"   # /, /api/state, /api/events, /metrics, /healthz
 
 [store]
 path = "target/dev/energybrain.db"   # deleted by `just dev` before every run
