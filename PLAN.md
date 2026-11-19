@@ -828,8 +828,10 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
   `minutes = ttl` (default 10) and refreshed after `ttl / 2` while it still applies. If
   energybrain dies or loses internet, the limit expires and the charger goes back to the
   app's own setting. A dead-man switch costs one write per 5 min, and refreshing the same
-  value doesn't change the pilot signal. The app's max current stays the user's ceiling
-  (lowest wins).
+  value doesn't change the pilot signal. The app has two controls (user, 2026-11-19):
+  "Charger limit" (in the menu, presumably max current, observation 47) and "Temporary
+  charging limit" (on the main screen, presumably the dynamic current, 48). "Charger limit"
+  is the user's ceiling (lowest wins).
 - **Release = write `max_current` (32 A) with a short TTL (1 min).** We can't delete a
   limit, but 32 A is above anything the app allows, so "lowest wins" leaves the app's
   value in charge. A release is a write, so it obeys the same rules as zones: never in
@@ -864,6 +866,14 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
   value. It counts as current for `min_change_interval`, like `awaiting_echo` on zones.
   After that it is presumed lost and retried. A `Rejected`/`Expired` command status is
   logged as an event.
+- **Temporary limit set in the app = override.** The app's "Temporary charging limit"
+  writes the same dynamic current we do. If observation 48 reports a value we didn't
+  write, the user has set it: the charger is excluded from shedding for
+  `override_minutes` (default 120), or until the cable is unplugged, and the guard uses
+  floors only. This mirrors a thermostat override. Without it, the user setting 6 A would
+  be overwritten by our 10 A, or their 15 A by our 6 A. A reboot or unplug clears 48 by
+  itself, and that is not an override. How a cleared value reads (absent, 0 or max) is
+  checked in E0.
 - **Observe mode** credits the charger saving it *would* have made, exactly as for zones
   (the whole saving since the decision, banked on release). Otherwise observe mode would
   go on to shed every floor while the car charges. Events `WouldLimitCharger { amps,
@@ -932,6 +942,7 @@ max_raise_step = 4
 min_pause_minutes = 15
 max_pauses_per_hour = 2
 stale_after_secs = 180
+override_minutes = 120
 ```
 
 ### Milestones
@@ -940,9 +951,10 @@ Each ends with `just check` green and a commit.
 **E0 — Discovery (user, before Active).**
 1. Find the serial, and check that the observations endpoint works with your account (a
    `curl` recipe in `docs/easee.md`).
-2. Move the app's current slider and see whether it changes observation 47 (max) or 48
-   (dynamic). If it is 48, our writes and the app overwrite each other, and the design
-   needs a rethink.
+2. Confirm the app mapping. Change "Charger limit" and check that observation 47
+   follows; change "Temporary charging limit" and check that 48 follows. Note whether
+   the temporary limit has a duration in the app, and how 48 reads with no limit set (after
+   an unplug).
 3. With the I-Pace plugged in, set 0 A and back to 10 A a few times, once after the car
    has slept for an hour. If it resumes every time, set `pause_allowed = true`.
 
@@ -958,6 +970,7 @@ safety. Scenarios:
 4. charger stale → floors only;
 5. observe mode with the EV → no write, would-limit events, floors not over-shed;
 6. car unplugged while limited → no retry storm.
+7. temporary limit set in the app while limited → override, charger left alone, floors shed.
 
 **E3 — `energybrain-easee` + config.** Auth/refresh/re-login, polling, commands, backoff,
 tested against an `axum` fake; `[ev]` config with validation; `config/example.toml`.
