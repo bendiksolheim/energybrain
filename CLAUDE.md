@@ -74,6 +74,10 @@ keep it up to date if a decision changes.
   compose; observe mode is reviewed via `/api/events`.
 - Other big loads: Easee Charge Lite EV charger (WiFi/cloud API, not controlled in phase 1),
   heat pump (not controllable). Both show up only in the whole-house meter reading.
+- EV: Jaguar I-Pace on the Easee, charging **1-phase** (10 A ≈ 2.2–2.3 kW; 6 A min ≈ 1.4 kW,
+  32 A max ≈ 7.4 kW). Usually run at 10–15 A from the Easee app. No departure target needed
+  yet: the charger may be shed freely. Easee/Tibber smart charging is off (no competing
+  controller).
 - HomeKit: Homebridge **Easy MQTT** plugin. Zigbee2MQTT also exists but is unrelated.
 
 ## Decision log

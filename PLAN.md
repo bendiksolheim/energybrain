@@ -489,7 +489,7 @@ switch the HomeKit switch to active.
 | Weather compensation (E) | New adapter crate `energybrain-metno` (reqwest) + outdoor sensor topic → `Input::Forecast`/`Input::OutdoorTemp`, `WeatherPolicy` emitting `Adjust` |
 | Heat pump coordination (B) | New zone kind/actuator for the heat pump driver over MQTT, plus a policy that lowers floor base when the heat pump is carrying the load |
 | 5 000 kWh Norgespris cap | Monthly kWh already derivable from `hourly_energy`. Add a spot-price adapter and a policy activated above the cap |
-| EV charger (Easee Charge Lite) | New adapter crate for Easee's cloud API, a controllable load with a current cap; `PeakGuard` treats it as a sheddable load before floors |
+| EV charger (Easee Charge Lite) | Planned in §9: adapter crate `energybrain-easee` for Easee's cloud API, a controllable load with a current cap; `PeakGuard` sheds it before floors |
 | Optimiser (F) | `energybrain-planner` crate using `good_lp` + `microlp`, producing a per-hour plan the `PlanPolicy` follows, still subject to `PeakGuard` caps |
 | Custom UI | Extend `energybrain-http` with endpoints and static assets (as the history page, §8, does) |
 
@@ -778,3 +778,204 @@ day.
 **H3 — Page.** Vendored uPlot, `GET /` and `/assets/*`, the page, docs (`docs/docker.md`,
 `docs/dev.md`) and the CLAUDE.md decision log.
 
+
+---
+
+## 9. EV charger (Easee Charge Lite)
+
+Goal: make the EV charger the guard's first and biggest lever. The car (Jaguar I-Pace)
+charges on **1 phase** on the IT net: 6 A ≈ 1.4 kW, 10 A ≈ 2.3 kW, 15 A ≈ 3.5 kW, 32 A ≈
+7.4 kW. It is usually run at 10–15 A from the Easee app, which on its own is most of the
+4.7 kWh/h budget. No "full by 07:00" target is needed yet (user decision): the charger may
+be shed freely. Easee's and Tibber's smart charging are off, so nothing else controls it.
+
+### Easee API (developer.easee.com, read 2026-11-19)
+Only the cloud API exists (no local interface on the Charge Lite). Base URL
+`https://api.easee.com`; `chargerId` is the charger's serial number.
+- **Auth:** `POST /api/accounts/login` `{userName, password}` → `{accessToken, expiresIn
+  (s), refreshToken, tokenType: "Bearer"}`. `POST /api/accounts/refresh_token
+  {refreshToken}` returns a new pair. A refresh token is **single use** (always keep the
+  newest) and can be revoked when its session is idle; on failure, log in again with the
+  password. Lifetimes are not documented: use `expiresIn`.
+- **Read:** `GET /state/{serial}/observations?ids=…` (note `/state`, not `/api`), **100
+  requests per 5 min**. It returns `{observations: [{id, timestamp, dataType, value}]}`.
+  The ids we use are 109 op mode, 120 total power (kW), 121 session energy (kWh), 48 dynamic
+  charger current (A, volatile), 47 max charger current (A, non-volatile), 114 output
+  current (A, what the pilot signal offers the car), 96 reason for no current, and 250
+  connected to cloud. The old `GET /api/chargers/{id}/state` is no longer in the spec, so
+  we don't use it.
+- **Op mode (109):** 0 Offline, 1 Disconnected, 2 AwaitingStart, 3 Charging,
+  4 Completed, 5 Error, 6 ReadyToCharge, 7 AwaitingAuthentication, 8 Deauthenticating.
+- **Write:** `POST /api/chargers/{id}/commands/set_dynamic_charger_current {amps,
+  minutes}`. It sets a volatile limit for `minutes` (a TTL, after which it is cleared;
+  0 = until replaced). The limit is also cleared on reboot or when the cable is unplugged.
+  The response is a `Command` with `status` 0 Sent / 1 Expired / 2 Executed / 3 Rejected.
+  No rate limit is stated for this endpoint.
+- **Not used:**
+  - the `settings` endpoint (20/min; `dynamicChargerCurrent` there is deprecated, and
+    Easee says non-dynamic values must not be changed by automation, to spare the flash);
+  - circuit-level dynamic current (only meaningful on a circuit master);
+  - `pause_charging` / `resume_charging` (see Decisions);
+  - SignalR streaming (no good Rust client, and the HAN meter already gives real-time
+    power).
+- Easee: "The lowest current value in the charger is the one the charger will use"; below
+  6 A the car can't charge; "some cars might get upset if the current is changed too
+  frequently".
+- Throttling (429, `Retry-After`) is not documented.
+
+### Decisions
+- **Control only through the TTL'd dynamic current.** Every limit is written with
+  `minutes = ttl` (default 10) and refreshed after `ttl / 2` while it still applies. If
+  energybrain dies or loses internet, the limit expires and the charger goes back to the
+  app's own setting. A dead-man switch costs one write per 5 min, and refreshing the same
+  value doesn't change the pilot signal. The app's max current stays the user's ceiling
+  (lowest wins).
+- **Release = write `max_current` (32 A) with a short TTL (1 min).** We can't delete a
+  limit, but 32 A is above anything the app allows, so "lowest wins" leaves the app's
+  value in charge. A release is a write, so it obeys the same rules as zones: never in
+  `Observe`/`Off`, except that leaving `Active` and shutdown release a charger we limited.
+- **Pause = `amps = 0` through the same command**, not `pause_charging`. It expires by
+  itself like every other limit, and `resume_charging` isn't needed. Pausing is off by
+  default (`pause_allowed = false`) until the I-Pace has been seen to resume reliably
+  (E0). Without it, 6 A is the floor.
+- **Shed order:** charger first, step by step down to `min_current` (6 A), then pause if
+  allowed, then floors by priority. This matches the "sheddable before floors" in §6.
+  Raising works like a zone release: only when the projection *with the extra amps back*
+  stays below `limit − release_margin`, and never more than `max_raise_step` (default 4 A)
+  at a time.
+- **Hysteresis for the car:**
+  - whole amps only;
+  - at most one change per `min_change_interval` (default 2 min). Lowering may bypass
+    this once if the projection is over the *allowed* limit, not just the effective one;
+  - a pause is held at least `min_pause` (default 15 min);
+  - at most `max_pauses_per_hour` (default 2). After that, 6 A is the floor for the rest of
+    the hour.
+- **Load model:** charger power per amp is learned as an effective voltage `Volt`
+  (EMA of `total_power / output_current` while charging above 1 kW, persisted, default
+  230 V × `phases`). So `Ampere × Volt → Kw` is the only new unit arithmetic. The guard's
+  expected saving for a step from `a` to `b` amps is `(a − b) × V × remaining`, capped at
+  the charger's last reported power, since the car may draw less than offered.
+- **The meter stays the truth for the projection.** Charger readings are 30 s polls used
+  only for the load estimate, the status breakdown (house without EV) and echo checks.
+  They are stale after `stale_after` (default 3 min, or `Offline`/not connected to the
+  cloud). While they are stale the charger is not a candidate (no writes, no credit) and
+  the guard falls back to floors.
+- **Echo and confirmation:** a write is confirmed when observation 48 reports the written
+  value. It counts as current for `min_change_interval`, like `awaiting_echo` on zones.
+  After that it is presumed lost and retried. A `Rejected`/`Expired` command status is
+  logged as an event.
+- **Observe mode** credits the charger saving it *would* have made, exactly as for zones
+  (the whole saving since the decision, banked on release). Otherwise observe mode would
+  go on to shed every floor while the car charges. Events `WouldLimitCharger { amps,
+  reasons }` show how often the car would have been adjusted or paused, which is the input
+  for deciding `pause_allowed` and the intervals.
+- **HomeKit:** `energybrain/ev/shed_allowed` + `/set` (switch, persisted, wins over
+  config) and `energybrain/ev/limited` (state), like zones.
+- **New dependency:** `reqwest` (`default-features = false`, `rustls-tls`, `json`) for the
+  HTTPS client, recorded in the CLAUDE.md decision log when added. This is the first TLS in
+  the project. Tests use a fake Easee built on `axum` (already a dependency) on a free
+  port, so no mocking crate is needed.
+- **Throttling and errors:** 429, 5xx and network errors back off exponentially (30 s →
+  10 min, honouring `Retry-After` if present). Polling stays at ≤ 10 per 5 min, a tenth of
+  the limit. 401 refreshes the token once, then logs in again. Tokens live in memory only
+  (a restart logs in again). Credentials sit in the gitignored config, like the MQTT ones.
+
+### Core changes
+- `Input::Charger(ChargerReading { at, mode: ChargerMode, power: Kw, session: Kwh,
+  dynamic_current: Option<Ampere>, max_current: Option<Ampere>, offered: Ampere,
+  connected: bool })`, one per poll.
+- `Input::SetChargerShedAllowed(bool)`.
+- Outputs:
+  - `LimitCharger { limit: ChargerLimit, ttl }` with `ChargerLimit::Amps(Ampere)
+    | Pause | Release`;
+  - `PersistChargerState { limit, at, volt }` (startup safety and learned voltage);
+  - `PersistChargerShedAllowed`.
+- `ChargerMode` mirrors the op-mode table. An unknown number is kept as
+  `ChargerMode::Unknown(u8)` and treated as "not charging". No `_ =>` arms on our own
+  enums.
+- Status and events gain a `charger` section (mode, power, offered/limited amps,
+  reasons, would-write). This changes the insta snapshots of `/api/state`, MQTT status and
+  events. Event kinds: `ChargerLimited`, `ChargerReleased`, `WouldLimitCharger`,
+  `ChargerCommandFailed`.
+- `GuardState` gains a charger stage before the zone loop. The proptests extend to: the
+  charger is never written in `Observe`/`Off`; the offered current is always `0` or within
+  `[min_current, max_current]`; no more than one change per `min_change_interval` except
+  the documented bypass.
+- Startup safety: a persisted limit that hasn't expired yet is kept if the guard still
+  wants it this hour, otherwise released. An expired one needs nothing.
+
+### Adapter: `energybrain-easee`
+Same split as the MQTT crate:
+- **pure layer:** request building, observation parsing → `ChargerReading`,
+  `LimitCharger` → command body, the token state machine, the backoff schedule;
+- **thin transport** (`reqwest`): a poll loop on `poll_interval` (default 30 s) that sends
+  `Input`s into the app loop through a channel, and a command task that receives
+  `LimitCharger`.
+  The app wires it like the MQTT link. A missing `[ev]` section means no charger and no
+  task.
+
+```toml
+[ev]
+serial = "EH000000"            # placeholder; the real serial lives in the gitignored config
+username = "…"                 # Easee account, gitignored config only
+password = "…"
+api_url = "https://api.easee.com"   # the sim's fake Easee in dev
+phases = 1
+min_current = 6
+max_current = 32
+pause_allowed = false
+shed_allowed = true
+poll_interval_secs = 30
+ttl_minutes = 10
+min_change_interval_secs = 120
+max_raise_step = 4
+min_pause_minutes = 15
+max_pauses_per_hour = 2
+stale_after_secs = 180
+```
+
+### Milestones
+Each ends with `just check` green and a commit.
+
+**E0 — Discovery (user, before Active).**
+1. Find the serial, and check that the observations endpoint works with your account (a
+   `curl` recipe in `docs/easee.md`).
+2. Move the app's current slider and see whether it changes observation 47 (max) or 48
+   (dynamic). If it is 48, our writes and the app overwrite each other, and the design
+   needs a rethink.
+3. With the I-Pace plugged in, set 0 A and back to 10 A a few times, once after the car
+   has slept for an hour. If it resumes every time, set `pause_allowed = true`.
+
+**E1 — Core types.** `ChargerMode`, `ChargerReading`, `ChargerLimit`, `Ampere × Volt`,
+inputs/outputs, learned voltage, status/event serialization (snapshots).
+
+**E2 — Guard + actuator.** Charger stage in `GuardState`, observe-mode credit, hysteresis
+and pause rules, TTL refresh, echo confirmation, leave-Active/shutdown release, startup
+safety. Scenarios:
+1. EV at 15 A in a cold evening → stepped down, floors untouched;
+2. EV + floors over budget at 6 A → floors shed after the charger;
+3. pause disallowed vs allowed;
+4. charger stale → floors only;
+5. observe mode with the EV → no write, would-limit events, floors not over-shed;
+6. car unplugged while limited → no retry storm.
+
+**E3 — `energybrain-easee` + config.** Auth/refresh/re-login, polling, commands, backoff,
+tested against an `axum` fake; `[ev]` config with validation; `config/example.toml`.
+
+**E4 — App wiring and surfaces.** The poll and command tasks in `run()`, HomeKit topics,
+`/api/state`, `/metrics` (`energybrain_ev_power_kw`, `energybrain_ev_offered_amps`,
+`energybrain_ev_limit_amps`, `energybrain_ev_writes_total`). `/healthz` stays 200 when only
+the charger is stale: the floors still guard, and status shows it. Update the architecture
+diagrams.
+
+**E5 — Simulator.** The sim serves a fake Easee API (axum) backed by its EV model. The EV
+then draws `min(offered, car_max) × 230 V`, ramping over ~20 s, with the TTL obeyed. This
+replaces `sim/ev/set` power with a plug-in/plug-out control. `config/dev.toml` points
+`api_url` at it.
+
+**E6 — History page.** EV power stacked in the house-power chart, offered and limited
+amps in their own small chart (store migration 3: charger columns in `samples`).
+
+**Go-live:** at least a week of observe mode with the car charging on several evenings.
+Check the would-limit events against reality, decide `pause_allowed` from E0, then enable
+the charger in Active.
