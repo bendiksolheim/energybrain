@@ -536,7 +536,6 @@ window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => view.data && load(true), 200);
 });
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => load(true));
 
 // Today (and this month) keep filling in: refresh every minute, keeping the zoom.
 setInterval(() => {
