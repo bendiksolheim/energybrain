@@ -1,0 +1,61 @@
+# System view: the energybrain process and everything it talks to while it runs.
+# Hand-written. Update when crates, external systems or the wiring between them change,
+# then run `just arch` (see docs/architecture/README.md). Every crate under crates/ must
+# appear here as `energybrain-<name>` (checked by a test in the app crate).
+
+direction: down
+
+classes: {
+  external: {style: {fill: "#f4f4f5"; stroke: "#71717a"}}
+  pure: {style: {fill: "#ecfdf5"; stroke: "#059669"}}
+  io: {style: {fill: "#eff6ff"; stroke: "#2563eb"}}
+  dev: {style: {fill: "#fff7ed"; stroke: "#ea580c"; stroke-dash: 4}}
+}
+
+house: House (LAN) {
+  class: external
+  pulse: "Tibber Pulse\non Kaifa HAN meter" {class: external}
+  ztrm: "Heatit Z-TRM3 ×6\nvia Z-Wave JS UI" {class: external}
+  homekit: "HomeKit\nHomebridge Easy MQTT" {class: external}
+}
+
+broker: "mosquitto" {class: external; shape: queue}
+
+sim: "energybrain-sim (dev only)\nsimulated house on an accelerated clock,\nsame topics and wire formats" {class: dev}
+
+eb: energybrain process {
+  mqtt: "energybrain-mqtt\nMQTT adapter" {
+    class: io
+    transport: "transport\nrumqttc" {class: io}
+    translate: "Translator\ntopics ⇄ Input / Output" {class: pure}
+    transport <-> translate
+  }
+  han: "energybrain-han\nHDLC + DLMS parser" {class: pure}
+
+  loop: "energybrain (app)\nrun loop: select! over\nMQTT · tick · shutdown\nSystemClock → now" {class: io}
+  core: "energybrain-core\nEngine::handle(Input) → Outputs\npure: no I/O, no clock\n(see engine view)" {class: pure}
+  config: "energybrain-config\nTOML → Config" {class: io}
+  store: "energybrain-store\nSQLite, own thread" {class: io}
+  http: "energybrain-http\naxum: page, /api, /metrics" {class: io}
+
+  mqtt.translate -> han: HAN frame
+  mqtt.translate -> loop: Input
+  loop -> mqtt.translate: "WriteSetpoint\nPublishStatus"
+  loop <-> core: "Input → Outputs"
+  config -> loop: startup {style.stroke-dash: 3}
+  loop -> store: "Persist* (channel)"
+  store -> loop: "PersistedState\nat startup" {style.stroke-dash: 3}
+  loop -> http: "Status (watch)\nwrite counters"
+}
+
+db: "SQLite /data\nhours · zones · events · samples" {shape: cylinder; class: external}
+browser: "Browser" {class: external}
+
+house.pulse -> broker: "tibber\nHDLC frames"
+house.ztrm <-> broker: "setpoint · power · kWh\n…/set writes"
+house.homekit <-> broker: "energybrain/…\nset · retained status"
+sim <-> broker: "same device topics\n+ sim/…" {style.stroke-dash: 4}
+broker <-> eb.mqtt.transport
+eb.store -> db
+eb.http -> db: "history queries" {style.stroke-dash: 3}
+browser -> eb.http: HTTP

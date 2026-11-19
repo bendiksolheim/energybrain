@@ -1,0 +1,65 @@
+# Engine view: what energybrain-core does with one Input (crates/core/src/engine.rs).
+# Hand-written. Update when Input/Output kinds or the decision pipeline change, then run
+# `just arch` (see docs/architecture/README.md).
+
+direction: right
+
+classes: {
+  msg: {style: {fill: "#f4f4f5"; stroke: "#71717a"}}
+  pure: {style: {fill: "#ecfdf5"; stroke: "#059669"}}
+  out: {style: {fill: "#eff6ff"; stroke: "#2563eb"}}
+}
+
+inputs: Input {
+  class: msg
+  meter_in: "MeterPower\nMeterCumulative" {class: msg}
+  zone_in: "ThermostatSetpoint\nZonePower · ZoneEnergy" {class: msg}
+  user_in: "SetMode\nSetShedAllowed" {class: msg}
+  tick: "Tick" {class: msg}
+}
+
+engine: "Engine (single owner of all state)" {
+  class: pure
+
+  meter: "Meter\npower integral + register\n→ hour energy" {class: pure}
+  zones: "Zones\nbase setpoint, echo detection,\nlearned heating power" {class: pure}
+  mode: "Mode\nActive · Observe · Off" {class: pure}
+
+  pipeline: "on Tick" {
+    class: pure
+    peaks: "Peaks + tariff\nhour limit" {class: pure}
+    guard: "Guard\nprojection vs limit\n→ shed / release zones" {class: pure}
+    policies: "Policies\nbase · guard caps\n· manual override" {class: pure}
+    arbiter: "Arbiter\none decision per zone" {class: pure}
+    actuator: "Actuator\ndeadband, min_interval,\nmode decides write" {class: pure}
+
+    peaks -> guard: limit
+    guard -> policies: shed set
+    policies -> arbiter: proposals
+    arbiter -> actuator: "decision + reasons"
+  }
+
+  meter -> pipeline.peaks: "hour energy\nprojection"
+  zones -> pipeline.guard: "power, shed_allowed"
+  zones -> pipeline.policies: "base, override"
+  mode -> pipeline.actuator
+}
+
+outputs: Output {
+  class: msg
+  write: "WriteSetpoint (Active)\nWouldWrite (Observe)" {class: out}
+  status: "PublishStatus" {class: out}
+  persist: "Persist*\nhour · zone · mode · event" {class: out}
+}
+
+inputs.meter_in -> engine.meter
+inputs.zone_in -> engine.zones
+inputs.user_in -> engine.mode
+inputs.user_in -> engine.zones: shed_allowed
+inputs.tick -> engine.pipeline.peaks
+
+engine.pipeline.actuator -> outputs.write
+engine.pipeline -> outputs.status
+engine.pipeline.guard -> outputs.persist: events
+engine.meter -> outputs.persist: hours
+engine.zones -> outputs.persist: "learned base, power"

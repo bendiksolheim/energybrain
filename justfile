@@ -33,6 +33,31 @@ run config="config/example.toml":
 docker:
     docker build -f deploy/Dockerfile -t energybrain .
 
+# Architecture diagrams (docs/architecture): render, then show with kitty graphics, in a new Rex
+# tab when inside Rex. `just arch engine` shows one view.
+arch *views="system engine crates": arch-render
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pngs=(); for v in {{views}}; do pngs+=("target/arch/$v.png"); done
+    if [ -n "${REX_SESSION:-}" ]; then
+      rex window new -s "$REX_SESSION" Architecture -c "{{justfile_directory()}}" --keep-open -- scripts/kitty-show.sh "${pngs[@]}" >/dev/null
+    else
+      scripts/kitty-show.sh "${pngs[@]}"
+    fi
+
+# Regenerate the crate view from `cargo metadata`; render every view to SVG (committed) and PNG
+arch-render:
+    scripts/arch-crates.sh > docs/architecture/crates.d2
+    mkdir -p target/arch
+    for v in system engine crates; do \
+      d2 --layout=elk --dark-theme=200 docs/architecture/$v.d2 docs/architecture/$v.svg 2>&1 | grep -v '^success' || true; \
+      d2 --layout=elk docs/architecture/$v.d2 target/arch/$v.png 2>&1 | grep -v '^success' || true; \
+    done
+
+# Live browser preview while editing a view: `just arch-edit engine`
+arch-edit view="system":
+    d2 --watch --layout=elk docs/architecture/{{view}}.d2 target/arch/{{view}}.svg
+
 # energybrain against the simulated house, on accelerated time (docs/dev.md)
 dev config="config/dev.toml" sim="config/sim.toml": dev-broker
     rm -f target/dev/energybrain.db target/dev/energybrain.db-*

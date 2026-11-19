@@ -427,3 +427,29 @@ async fn flushing_skips_events_until_the_disconnect() {
     drop(tx);
     until_disconnected(&mut rx).await;
 }
+
+/// docs/architecture/system.d2 is hand-written: every workspace crate must have a box there,
+/// labelled with its package name (`"energybrain-core\n…` or `"energybrain (app)\n…`).
+#[test]
+fn architecture_diagram_names_every_crate() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let diagram = std::fs::read_to_string(root.join("docs/architecture/system.d2")).unwrap();
+    let mut missing = Vec::new();
+    for entry in std::fs::read_dir(root.join("crates")).unwrap() {
+        let manifest = std::fs::read_to_string(entry.unwrap().path().join("Cargo.toml")).unwrap();
+        let name = manifest
+            .lines()
+            .find_map(|l| l.strip_prefix("name = \""))
+            .and_then(|l| l.strip_suffix('"'))
+            .unwrap()
+            .to_owned();
+        if !diagram.contains(&format!("\"{name}\\n")) && !diagram.contains(&format!("\"{name} (")) {
+            missing.push(name);
+        }
+    }
+    assert_eq!(
+        missing,
+        Vec::<String>::new(),
+        "add these crates to system.d2"
+    );
+}
