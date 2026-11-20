@@ -14,6 +14,7 @@ inputs: Input {
   class: msg
   meter_in: "MeterPower\nMeterCumulative" {class: msg}
   zone_in: "ThermostatSetpoint\nZonePower · ZoneEnergy" {class: msg}
+  charger_in: "Charger\n(Easee poll)" {class: msg}
   user_in: "SetMode\nSetShedAllowed" {class: msg}
   tick: "Tick" {class: msg}
 }
@@ -24,6 +25,7 @@ engine: "Engine (single owner of all state)" {
   meter: "Meter\npower integral + register\n→ hour energy" {class: pure}
   zones: "Zones\nbase setpoint, echo detection,\nlearned heating power" {class: pure}
   mode: "Mode\nActive · Observe · Off" {class: pure}
+  charger: "Charger (optional)\nlatest reading, freshness" {class: pure}
 
   pipeline: "on Tick" {
     class: pure
@@ -43,6 +45,7 @@ engine: "Engine (single owner of all state)" {
   zones -> pipeline.guard: "power, shed_allowed"
   zones -> pipeline.policies: "base, override"
   mode -> pipeline.actuator
+  charger -> pipeline: "status only (guard: E2)"
 }
 
 outputs: Output {
@@ -54,6 +57,7 @@ outputs: Output {
 
 inputs.meter_in -> engine.meter
 inputs.zone_in -> engine.zones
+inputs.charger_in -> engine.charger
 inputs.user_in -> engine.mode
 inputs.user_in -> engine.zones: shed_allowed
 inputs.tick -> engine.pipeline.peaks

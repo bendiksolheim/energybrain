@@ -1,0 +1,34 @@
+---
+source: crates/core/src/charger.rs
+assertion_line: 288
+expression: "serde_json::to_string_pretty(&c.status(now)).unwrap()"
+---
+{
+  "freshness": "fresh",
+  "available": true,
+  "reading": {
+    "at": "2026-11-15T17:00:00Z",
+    "mode": "charging",
+    "power": {
+      "value": 2.3,
+      "unit": "kW"
+    },
+    "session_energy": {
+      "value": 3.2,
+      "unit": "kWh"
+    },
+    "dynamic_current": {
+      "value": 10.0,
+      "unit": "A"
+    },
+    "max_current": {
+      "value": 15.0,
+      "unit": "A"
+    },
+    "offered": {
+      "value": 10.0,
+      "unit": "A"
+    },
+    "connected": true
+  }
+}

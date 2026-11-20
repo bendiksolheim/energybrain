@@ -561,6 +561,7 @@ pub(crate) mod tests {
                 power: None,
                 heating_kw: None,
             }],
+            charger: None,
         }
     }
 

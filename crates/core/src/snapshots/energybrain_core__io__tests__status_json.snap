@@ -1,6 +1,6 @@
 ---
 source: crates/core/src/io.rs
-assertion_line: 334
+assertion_line: 430
 expression: json(&status)
 ---
 {
@@ -102,5 +102,31 @@ expression: json(&status)
         "unit": "kW"
       }
     }
-  ]
+  ],
+  "charger": {
+    "freshness": "fresh",
+    "available": true,
+    "reading": {
+      "at": "2026-11-15T17:19:40Z",
+      "mode": "charging",
+      "power": {
+        "value": 2.3,
+        "unit": "kW"
+      },
+      "session_energy": {
+        "value": 4.1,
+        "unit": "kWh"
+      },
+      "dynamic_current": null,
+      "max_current": {
+        "value": 15.0,
+        "unit": "A"
+      },
+      "offered": {
+        "value": 10.0,
+        "unit": "A"
+      },
+      "connected": true
+    }
+  }
 }

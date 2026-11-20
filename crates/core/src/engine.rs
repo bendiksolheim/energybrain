@@ -9,6 +9,7 @@ use jiff::Timestamp;
 
 use crate::actuator::{Actuation, ActuatorConfig, actuate};
 use crate::arbiter::{Decision, arbitrate};
+use crate::charger::{Charger, ChargerConfig};
 use crate::energy::{HourEnergy, Meter, MeterConfig, MeterSnapshot};
 use crate::guard::{GuardConfig, GuardEvent, GuardInput, GuardState, ReleaseReason, Shed};
 use crate::ids::ZoneId;
@@ -42,6 +43,8 @@ pub struct EngineConfig {
     pub zone_settings: ZoneSettings,
     /// The zones.
     pub zones: Vec<ZoneConfig>,
+    /// The EV charger, if there is one.
+    pub charger: Option<ChargerConfig>,
 }
 
 /// What is persisted for one zone.
@@ -111,6 +114,7 @@ pub struct Engine {
     ledger: MonthLedger,
     zones: BTreeMap<ZoneId, Zone>,
     guard: GuardState,
+    charger: Option<Charger>,
     policies: Vec<Box<dyn Policy + Send + Sync>>,
 }
 
@@ -175,6 +179,7 @@ impl Engine {
         ];
         Self {
             meter: Meter::new(cfg.meter),
+            charger: cfg.charger.map(Charger::new),
             cfg,
             mode,
             ledger,
@@ -217,6 +222,12 @@ impl Engine {
                 .map(|(hour, kwh)| Output::PersistZoneHour { zone, hour, kwh })
                 .into_iter()
                 .collect(),
+            Input::Charger(reading) => {
+                if let Some(c) = &mut self.charger {
+                    c.on_reading(reading);
+                }
+                Vec::new()
+            }
             Input::SetMode { at, mode } => self.set_mode(at, mode),
             Input::SetShedAllowed { zone, allowed } => match self.zones.get_mut(&zone) {
                 Some(z) => {
@@ -471,6 +482,7 @@ impl Engine {
             top_average,
             tier: self.cfg.tariff.tier_for(top_average),
             zones,
+            charger: self.charger.as_ref().map(|c| c.status(now)),
         }
     }
 }
@@ -506,6 +518,7 @@ mod tests {
             actuator: ActuatorConfig::default(),
             zone_settings: ZoneSettings::default(),
             zones: vec![config("bathroom", 1), config("hallway", 3)],
+            charger: None,
         }
     }
 
@@ -860,5 +873,37 @@ mod tests {
             mode: Mode::Observe,
         });
         assert!(out.iter().any(|o| is_write(o, 26.5)), "{out:#?}");
+    }
+
+    #[test]
+    fn charger_readings_reach_the_status_only_when_a_charger_is_configured() {
+        use crate::charger::{ChargerConfig, ChargerMode, tests::reading};
+        let r = reading("2026-11-15T17:00:00Z", ChargerMode::Charging, 2.3);
+
+        let mut without = engine(PersistedState::default());
+        assert_eq!(without.handle(Input::Charger(r)), Vec::new());
+        let out = without.handle(Input::Tick { at: ts(T0) });
+        assert!(
+            out.iter()
+                .any(|o| matches!(o, Output::PublishStatus(s) if s.charger.is_none()))
+        );
+
+        let mut with = Engine::new(
+            EngineConfig {
+                charger: Some(ChargerConfig::default()),
+                ..cfg()
+            },
+            PersistedState::default(),
+            ts(T0),
+        );
+        assert_eq!(with.handle(Input::Charger(r)), Vec::new());
+        let out = with.handle(Input::Tick {
+            at: ts("2026-11-15T17:00:10Z"),
+        });
+        assert!(out.iter().any(|o| matches!(
+            o,
+            Output::PublishStatus(s)
+                if s.charger.is_some_and(|c| c.available && c.reading == Some(r))
+        )));
     }
 }

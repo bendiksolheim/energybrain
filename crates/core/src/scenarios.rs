@@ -122,6 +122,7 @@ fn config(floors: &[Floor]) -> EngineConfig {
                 nominal_kw: Kw::new(1.0),
             })
             .collect(),
+        charger: None,
     }
 }
 

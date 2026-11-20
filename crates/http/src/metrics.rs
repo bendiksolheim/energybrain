@@ -211,6 +211,7 @@ pub(crate) mod tests {
                 power: Some(Kw::new(1.5)),
                 heating_kw: Some(Kw::new(1.5)),
             }],
+            charger: None,
         }
     }
 

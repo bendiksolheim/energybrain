@@ -1038,6 +1038,7 @@ mod tests {
                 },
                 z("basement", "Basement"),
             ],
+            charger: None,
         }
     }
 

@@ -1,5 +1,5 @@
 //! Pure domain for energybrain: units, clock, time, tariff, energy accounting, peaks, zones,
-//! policies, arbiter, actuator and engine.
+//! the EV charger, policies, arbiter, actuator and engine.
 //!
 //! No async, no I/O, and no reading of the system clock: time always comes in as an argument.
 
@@ -8,6 +8,7 @@
 
 pub mod actuator;
 pub mod arbiter;
+pub mod charger;
 pub mod clock;
 pub mod energy;
 pub mod engine;

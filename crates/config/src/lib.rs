@@ -523,6 +523,8 @@ impl Raw {
                 actuator,
                 zone_settings,
                 zones,
+                // The `[ev]` section arrives with the Easee adapter (PLAN.md §9, E3).
+                charger: None,
             },
         })
     }

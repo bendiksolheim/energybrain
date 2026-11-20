@@ -14,6 +14,7 @@ use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 use jiff::SignedDuration;
 
 const SECONDS_PER_HOUR: f64 = 3600.0;
+const WATTS_PER_KW: f64 = 1000.0;
 
 /// Shared plumbing for every unit: constructor, accessor, `Display` with a unit suffix,
 /// `min`/`max` helpers, and JSON serialization as `{"value": 5.3, "unit": "kWh"}`.
@@ -224,6 +225,23 @@ impl Kw {
     }
 }
 
+/// Current at a voltage gives power (V·A = W).
+impl Mul<Volt> for Ampere {
+    type Output = Kw;
+    fn mul(self, rhs: Volt) -> Kw {
+        Kw(self.0 * rhs.0 / WATTS_PER_KW)
+    }
+}
+
+/// Power at a voltage needs this current. A zero voltage yields an infinite or NaN current,
+/// so callers must only divide by voltages they know are positive.
+impl Div<Volt> for Kw {
+    type Output = Ampere;
+    fn div(self, rhs: Volt) -> Ampere {
+        Ampere(self.0 * WATTS_PER_KW / rhs.0)
+    }
+}
+
 impl Sub for Celsius {
     type Output = CelsiusDelta;
     fn sub(self, rhs: Self) -> CelsiusDelta {
@@ -403,6 +421,12 @@ mod tests {
         assert_eq!(Kwh::new(3.0) / SignedDuration::from_mins(30), Kw::new(6.0));
         assert_eq!(Kwh::new(4.2).per_hour(), Kw::new(4.2));
         assert_eq!(Kw::new(4.2).for_one_hour(), Kwh::new(4.2));
+    }
+
+    #[test]
+    fn current_voltage_and_power() {
+        assert_eq!(Ampere::new(10.0) * Volt::new(230.0), Kw::new(2.3));
+        assert_eq!(Kw::new(3.45) / Volt::new(230.0), Ampere::new(15.0));
     }
 
     #[test]

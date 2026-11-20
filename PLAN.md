@@ -852,9 +852,11 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
   - a pause is held at least `min_pause` (default 15 min);
   - at most `max_pauses_per_hour` (default 2). After that, 6 A is the floor for the rest of
     the hour.
-- **Load model:** charger power per amp is learned as an effective voltage `Volt`
-  (EMA of `total_power / output_current` while charging above 1 kW, persisted, default
-  230 V × `phases`). So `Ampere × Volt → Kw` is the only new unit arithmetic. The guard's
+- **Load model:** charger power per amp is a configured voltage, 230 V × `phases`
+  (`ChargerConfig::voltage`), not learned (changed in E1). Learning `total_power /
+  output_current` would be wrong whenever the car draws less than it is offered, and
+  230 V vs a measured ~225 V doesn't change any decision. `Ampere × Volt → Kw` and
+  `Kw / Volt → Ampere` are the new unit arithmetic. The guard's
   expected saving for a step from `a` to `b` amps is `(a − b) × V × remaining`, capped at
   the charger's last reported power, since the car may draw less than offered.
 - **The meter stays the truth for the projection.** Charger readings are 30 s polls used
@@ -902,7 +904,7 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
 - Outputs:
   - `LimitCharger { limit: ChargerLimit, ttl }` with `ChargerLimit::Amps(Ampere)
     | Pause | Release`;
-  - `PersistChargerState { limit, at, volt }` (startup safety and learned voltage);
+  - `PersistChargerState { limit, at }` (startup safety);
   - `PersistChargerShedAllowed`.
 - `ChargerMode` mirrors the op-mode table. An unknown number is kept as
   `ChargerMode::Unknown(u8)` and treated as "not charging". No `_ =>` arms on our own
@@ -962,8 +964,13 @@ Each ends with `just check` green and a commit.
    to 10 A a few times, once after the car has slept for an hour. If it resumes every time,
    set `pause_allowed = true`. Until then pausing stays off and 6 A is the floor.
 
-**E1 — Core types.** `ChargerMode`, `ChargerReading`, `ChargerLimit`, `Ampere × Volt`,
-inputs/outputs, learned voltage, status/event serialization (snapshots).
+**E1 — Core types. ✅** `core::charger`: `ChargerMode` (with `car_connected`),
+`ChargerReading`, `ChargerConfig` (voltage, `stale_after`), `Charger` (latest reading,
+freshness, `available` = fresh + cloud-connected + not offline), `ChargerStatus`;
+`Ampere × Volt`, `Kw / Volt`; `Input::Charger`, `EngineConfig::charger` (`None` until
+E3), `Status::charger` (`null` without a charger). Outputs, events and `ChargerLimit` move
+to E2, where they are first produced, so nothing downstream has to handle variants that
+never occur.
 
 **E2 — Guard + actuator.** Charger stage in `GuardState`, observe-mode credit, hysteresis
 and pause rules, TTL refresh, echo confirmation, leave-Active/shutdown release, startup

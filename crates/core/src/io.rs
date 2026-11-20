@@ -2,6 +2,7 @@
 
 use jiff::Timestamp;
 
+use crate::charger::{ChargerReading, ChargerStatus};
 use crate::energy::{Freshness, HourEnergy};
 use crate::guard::{GuardEvent, GuardStatus};
 use crate::ids::ZoneId;
@@ -57,6 +58,8 @@ pub enum Input {
         /// Counter value.
         total: Kwh,
     },
+    /// A poll of the EV charger.
+    Charger(ChargerReading),
     /// The user changed the mode.
     SetMode {
         /// When.
@@ -231,6 +234,8 @@ pub struct Status {
     pub tier: Tier,
     /// Per-zone state.
     pub zones: Vec<ZoneStatus>,
+    /// The EV charger, if one is configured.
+    pub charger: Option<ChargerStatus>,
 }
 
 /// One zone's part of [`Status`].
@@ -337,11 +342,13 @@ mod tests {
     use jiff::civil::date;
 
     use super::*;
+    use crate::charger::ChargerMode;
     use crate::energy::Quality;
     use crate::guard::ReleaseReason;
     use crate::peaks::LimitBasis;
     use crate::policy::PolicyName;
     use crate::tariff::TierIndex;
+    use crate::units::Ampere;
     use crate::units::Kr;
     use crate::zone::tests::ts;
 
@@ -400,6 +407,20 @@ mod tests {
                 power: Some(Kw::new(1.5)),
                 heating_kw: Some(Kw::new(1.45)),
             }],
+            charger: Some(ChargerStatus {
+                freshness: Freshness::Fresh,
+                available: true,
+                reading: Some(ChargerReading {
+                    at: ts("2026-11-15T17:19:40Z"),
+                    mode: ChargerMode::Charging,
+                    power: Kw::new(2.3),
+                    session: Kwh::new(4.1),
+                    dynamic_current: None,
+                    max_current: Some(Ampere::new(15.0)),
+                    offered: Ampere::new(10.0),
+                    connected: true,
+                }),
+            }),
         }
     }
 
