@@ -9,9 +9,11 @@ use jiff::Timestamp;
 
 use crate::actuator::{Actuation, ActuatorConfig, actuate};
 use crate::arbiter::{Decision, arbitrate};
-use crate::charger::{Charger, ChargerConfig};
+use crate::charger::{Charger, ChargerActuation, ChargerConfig, ChargerTarget, ChargerWriteRecord};
 use crate::energy::{HourEnergy, Meter, MeterConfig, MeterSnapshot};
-use crate::guard::{GuardConfig, GuardEvent, GuardInput, GuardState, ReleaseReason, Shed};
+use crate::guard::{
+    ChargerShed, GuardConfig, GuardEvent, GuardInput, GuardState, ReleaseReason, Shed,
+};
 use crate::ids::ZoneId;
 use crate::io::{Event, EventKind, Input, Output, Status, ZoneStatus};
 use crate::mode::Mode;
@@ -20,6 +22,7 @@ use crate::policy::{Context, ManualOverride, PeakGuardCaps, Policy, Proposal, Us
 use crate::tariff::CapacityTariff;
 use crate::time::{HourStart, LocalCalendar};
 use crate::units::{Celsius, Kw, Kwh};
+
 use crate::zone::{Override, SetpointReport, Zone, ZoneConfig, ZoneSettings};
 
 /// Everything the engine is configured with.
@@ -62,6 +65,15 @@ pub struct PersistedZone {
     pub manual: Option<Override>,
 }
 
+/// What is persisted for the charger.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PersistedCharger {
+    /// Our last write, until released.
+    pub last_write: Option<ChargerWriteRecord>,
+    /// Runtime shed permission.
+    pub shed_allowed: Option<bool>,
+}
+
 /// State loaded at startup.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PersistedState {
@@ -71,6 +83,8 @@ pub struct PersistedState {
     pub hours: BTreeMap<HourStart, HourEnergy>,
     /// Stored zone state.
     pub zones: BTreeMap<ZoneId, PersistedZone>,
+    /// Stored charger state.
+    pub charger: PersistedCharger,
 }
 
 impl PersistedState {
@@ -93,8 +107,14 @@ impl PersistedState {
             Output::PersistShedAllowed { zone, allowed } => {
                 self.zone(zone).shed_allowed = Some(*allowed);
             }
+            Output::PersistChargerWrite(w) => self.charger.last_write = *w,
+            Output::PersistChargerShedAllowed(allowed) => {
+                self.charger.shed_allowed = Some(*allowed);
+            }
             Output::WriteSetpoint { .. }
             | Output::WouldWrite { .. }
+            | Output::WriteCharger { .. }
+            | Output::WouldWriteCharger { .. }
             | Output::PublishStatus(_)
             | Output::PersistZoneHour { .. }
             | Output::PersistEvent(_) => {}
@@ -172,6 +192,27 @@ impl Engine {
             }
             zones.insert(z.id().clone(), z);
         }
+        let charger = cfg.charger.map(|cc| {
+            let mut c = Charger::new(cc);
+            c.last_write = persisted.charger.last_write;
+            c.shed_allowed_override = persisted.charger.shed_allowed;
+            // Startup safety, as for zones: a limit of ours still in force goes back to the
+            // guard, which keeps or raises it.
+            if mode == Mode::Active
+                && let Some(w) = c.last_write
+                && w.until > now
+                && w.current < cc.max_current
+            {
+                guard.charger = Some(ChargerShed {
+                    target: ChargerTarget::at(w.current),
+                    since: w.at,
+                    changed: w.at,
+                    step: Kw::ZERO,
+                    reason: "still limited when the service restarted".to_owned(),
+                });
+            }
+            c
+        });
         let policies: Vec<Box<dyn Policy + Send + Sync>> = vec![
             Box::new(UserSetpointBase),
             Box::new(PeakGuardCaps),
@@ -179,7 +220,7 @@ impl Engine {
         ];
         Self {
             meter: Meter::new(cfg.meter),
-            charger: cfg.charger.map(Charger::new),
+            charger,
             cfg,
             mode,
             ledger,
@@ -223,11 +264,27 @@ impl Engine {
                 .into_iter()
                 .collect(),
             Input::Charger(reading) => {
-                if let Some(c) = &mut self.charger {
-                    c.on_reading(reading);
-                }
-                Vec::new()
+                let detected = self.charger.as_mut().and_then(|c| c.on_reading(reading));
+                detected
+                    .map(|o| {
+                        self.event(
+                            reading.at,
+                            EventKind::ChargerOverride {
+                                current: o.current,
+                                until: o.until,
+                            },
+                        )
+                    })
+                    .into_iter()
+                    .collect()
             }
+            Input::SetChargerShedAllowed { allowed } => match &mut self.charger {
+                Some(c) => {
+                    c.shed_allowed_override = Some(allowed);
+                    vec![Output::PersistChargerShedAllowed(allowed)]
+                }
+                None => Vec::new(),
+            },
             Input::SetMode { at, mode } => self.set_mode(at, mode),
             Input::SetShedAllowed { zone, allowed } => match self.zones.get_mut(&zone) {
                 Some(z) => {
@@ -305,8 +362,19 @@ impl Engine {
                 },
             ));
         }
+        if self.guard.charger.take().is_some() {
+            out.push(self.event(
+                at,
+                EventKind::Guard {
+                    event: GuardEvent::ChargerRelease {
+                        reason: ReleaseReason::GuardOff,
+                    },
+                },
+            ));
+        }
         let decisions = self.decide(at);
         out.extend(self.actuate_all(at, &decisions, Mode::Active));
+        out.extend(self.actuate_charger(at, Mode::Active));
         out
     }
 
@@ -320,6 +388,9 @@ impl Engine {
         if new == Mode::Active {
             for z in self.zones.values_mut() {
                 z.last_would_write = None;
+            }
+            if let Some(c) = &mut self.charger {
+                c.last_would_write = None;
             }
         }
         self.mode = new;
@@ -367,6 +438,7 @@ impl Engine {
             limit: &limit,
             zones: &self.zones,
             settings: &self.cfg.zone_settings,
+            charger: self.charger.as_ref(),
             enabled: self.mode != Mode::Off,
         };
         let events = self.guard.update(&self.cfg.guard, &input);
@@ -376,6 +448,7 @@ impl Engine {
 
         let decisions = self.decide(now);
         out.extend(self.actuate_all(now, &decisions, self.mode));
+        out.extend(self.actuate_charger(now, self.mode));
         out.push(Output::PublishStatus(Box::new(
             self.status(now, &snap, limit, &decisions),
         )));
@@ -439,6 +512,26 @@ impl Engine {
         out
     }
 
+    fn actuate_charger(&mut self, now: Timestamp, mode: Mode) -> Vec<Output> {
+        let shed = self.guard.charger.as_ref();
+        let target = shed.map(|s| s.target);
+        let reason = shed.map_or_else(|| "no limit needed".to_owned(), |s| s.reason.clone());
+        let Some(c) = &mut self.charger else {
+            return Vec::new();
+        };
+        match c.actuate(mode, target, now) {
+            ChargerActuation::None => Vec::new(),
+            ChargerActuation::Write(write) => vec![
+                Output::WriteCharger { write, reason },
+                Output::PersistChargerWrite(c.last_write),
+            ],
+            ChargerActuation::WouldWrite(write) => {
+                vec![Output::WouldWriteCharger { write, reason }]
+            }
+            ChargerActuation::Forget => vec![Output::PersistChargerWrite(None)],
+        }
+    }
+
     fn status(
         &self,
         now: Timestamp,
@@ -482,7 +575,10 @@ impl Engine {
             top_average,
             tier: self.cfg.tariff.tier_for(top_average),
             zones,
-            charger: self.charger.as_ref().map(|c| c.status(now)),
+            charger: self
+                .charger
+                .as_ref()
+                .map(|c| c.status(now, self.guard.charger.as_ref().map(|s| s.target))),
         }
     }
 }
@@ -905,5 +1001,45 @@ mod tests {
             Output::PublishStatus(s)
                 if s.charger.is_some_and(|c| c.available && c.reading == Some(r))
         )));
+    }
+
+    #[test]
+    fn charger_shed_permission_is_kept_and_persisted() {
+        use crate::charger::ChargerConfig;
+        let mut without = engine(PersistedState::default());
+        assert_eq!(
+            without.handle(Input::SetChargerShedAllowed { allowed: false }),
+            Vec::new()
+        );
+
+        let mut p = PersistedState::default();
+        p.apply(&Output::PersistChargerShedAllowed(true));
+        let mut e = Engine::new(
+            EngineConfig {
+                charger: Some(ChargerConfig::default()),
+                ..cfg()
+            },
+            p,
+            ts(T0),
+        );
+        let out = e.handle(Input::SetChargerShedAllowed { allowed: false });
+        assert_eq!(out, vec![Output::PersistChargerShedAllowed(false)]);
+        let mut p = PersistedState::default();
+        p.apply(&out[0]);
+        assert_eq!(p.charger.shed_allowed, Some(false));
+        let tick = e.handle(Input::Tick { at: ts(T0) });
+        assert!(tick.iter().any(|o| matches!(
+            o,
+            Output::PublishStatus(s) if s.charger.is_some_and(|c| !c.shed_allowed)
+        )));
+        // Switching to active forgets what observe mode would have written.
+        assert_eq!(
+            e.handle(Input::SetMode {
+                at: ts(T0),
+                mode: Mode::Active
+            })
+            .len(),
+            2
+        );
     }
 }

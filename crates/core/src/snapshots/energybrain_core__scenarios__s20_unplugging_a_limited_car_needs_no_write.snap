@@ -1,0 +1,17 @@
+---
+source: crates/core/src/scenarios.rs
+assertion_line: 1051
+expression: sim.snapshot()
+---
+11-15 17:00:00Z car plugged in
+11-15 17:00:30Z [active] limit charger to 14 A (saves 0.23 kW; projected 4.85 kWh, limit 4.70 kWh)
+11-15 17:00:30Z write charger 14 A for 10 min
+11-15 17:01:10Z [active] shed bathroom (1.50 kW; projected 6.84 kWh > 4.70 kWh)
+11-15 17:01:10Z write bathroom 22.5 °C
+11-15 17:02:40Z [active] limit charger to 7 A (saves 1.61 kW; projected 6.07 kWh, limit 4.70 kWh)
+11-15 17:02:40Z write charger 7 A for 10 min
+11-15 17:07:40Z write charger 7 A for 10 min
+11-15 17:10:00Z car unplugged
+11-15 17:10:30Z [active] release charger (CarDisconnected)
+11-15 17:12:30Z [active] release bathroom (BelowLimit)
+11-15 17:12:30Z write bathroom 26.5 °C

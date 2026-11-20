@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use crate::actuator::ActuatorConfig;
+use crate::charger::{ChargerConfig, ChargerMode, ChargerReading};
 use crate::energy::HourEnergy;
 use crate::energy::{MeterConfig, Quality};
 use crate::engine::{Engine, EngineConfig, PersistedState};
@@ -17,7 +18,7 @@ use crate::io::{EventKind, Input, Output, Status};
 use crate::mode::Mode;
 use crate::tariff::{CapacityTariff, Step};
 use crate::time::{HourStart, LocalCalendar};
-use crate::units::{Celsius, CelsiusDelta, Kr, Kw, Kwh};
+use crate::units::{Ampere, Celsius, CelsiusDelta, Kr, Kw, Kwh};
 use crate::zone::{ZoneConfig, ZoneSettings};
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -99,7 +100,88 @@ fn floors() -> Vec<Floor> {
         .collect()
 }
 
-fn config(floors: &[Floor]) -> EngineConfig {
+/// A car on the Easee: draws `min(demand, offered) × 230 V` (nothing below 6 A), following
+/// a new offer 20 s later. The charger is polled every 30 s.
+struct Ev {
+    plugged: bool,
+    /// What the car would take.
+    demand: f64,
+    /// The app's "Charger limit".
+    app_limit: f64,
+    /// The dynamic current and when it expires.
+    dynamic: Option<(f64, Timestamp)>,
+    power: f64,
+    ramp_at: Option<Timestamp>,
+    polled: bool,
+}
+
+impl Ev {
+    fn new() -> Self {
+        Self {
+            plugged: false,
+            demand: 15.0,
+            app_limit: 15.0,
+            dynamic: None,
+            power: 0.0,
+            ramp_at: None,
+            polled: true,
+        }
+    }
+
+    fn offered(&self, now: Timestamp) -> f64 {
+        let dynamic = self
+            .dynamic
+            .filter(|&(_, until)| until > now)
+            .map_or(f64::MAX, |(a, _)| a);
+        self.app_limit.min(dynamic)
+    }
+
+    fn wanted_power(&self, now: Timestamp) -> f64 {
+        let amps = self.offered(now).min(self.demand);
+        if self.plugged && amps >= 6.0 {
+            amps * 0.23
+        } else {
+            0.0
+        }
+    }
+
+    fn step(&mut self, now: Timestamp) {
+        let wanted = self.wanted_power(now);
+        if (wanted - self.power).abs() < 1e-9 {
+            self.ramp_at = None;
+        } else if let Some(at) = self.ramp_at {
+            if now >= at {
+                self.power = wanted;
+                self.ramp_at = None;
+            }
+        } else {
+            self.ramp_at = Some(now + SignedDuration::from_secs(20));
+        }
+    }
+
+    fn reading(&self, now: Timestamp) -> ChargerReading {
+        let mode = match (self.plugged, self.power > 0.0) {
+            (false, _) => ChargerMode::Disconnected,
+            (true, true) => ChargerMode::Charging,
+            (true, false) => ChargerMode::ReadyToCharge,
+        };
+        ChargerReading {
+            at: now,
+            mode,
+            power: Kw::new(self.power),
+            session: Kwh::ZERO,
+            dynamic_current: self
+                .dynamic
+                .filter(|&(_, until)| until > now)
+                .map(|(a, _)| Ampere::new(a)),
+            max_current: Some(Ampere::new(self.app_limit)),
+            offered: Ampere::new(if self.plugged { self.offered(now) } else { 0.0 }),
+            connected: true,
+        }
+    }
+}
+
+fn config(floors: &[Floor], charger: Option<ChargerConfig>) -> EngineConfig {
     EngineConfig {
         calendar: calendar(),
         tariff: tensio(),
@@ -122,13 +204,15 @@ fn config(floors: &[Floor]) -> EngineConfig {
                 nominal_kw: Kw::new(1.0),
             })
             .collect(),
-        charger: None,
+        charger,
     }
 }
 
 struct Sim {
     engine: Engine,
     floors: Vec<Floor>,
+    ev: Ev,
+    charger: Option<ChargerConfig>,
     now: Timestamp,
     background: f64,
     register: f64,
@@ -144,14 +228,30 @@ impl Sim {
         Self::with_state(start, mode, PersistedState::default())
     }
 
-    fn with_state(start: &str, mode: Mode, mut persisted: PersistedState) -> Self {
+    fn with_state(start: &str, mode: Mode, persisted: PersistedState) -> Self {
+        Self::build(start, mode, persisted, None)
+    }
+
+    /// A house with the EV charger (nothing plugged in yet).
+    fn with_charger(start: &str, mode: Mode, charger: ChargerConfig) -> Self {
+        Self::build(start, mode, PersistedState::default(), Some(charger))
+    }
+
+    fn build(
+        start: &str,
+        mode: Mode,
+        mut persisted: PersistedState,
+        charger: Option<ChargerConfig>,
+    ) -> Self {
         persisted.mode = Some(mode);
         let now = ts(start);
         let floors = floors();
-        let engine = Engine::new(config(&floors), persisted.clone(), now);
+        let engine = Engine::new(config(&floors, charger), persisted.clone(), now);
         let mut sim = Self {
             engine,
             floors,
+            ev: Ev::new(),
+            charger,
             now,
             background: 1.0,
             register: 10_000.0,
@@ -186,7 +286,27 @@ impl Sim {
     }
 
     fn house_power(&self) -> f64 {
-        self.background + self.floors.iter().map(Floor::power).sum::<f64>()
+        self.background + self.floors.iter().map(Floor::power).sum::<f64>() + self.ev.power
+    }
+
+    fn plug_in(&mut self) {
+        self.log.push(format!("{} car plugged in", hm(self.now)));
+        self.ev.plugged = true;
+    }
+
+    fn unplug(&mut self) {
+        self.log.push(format!("{} car unplugged", hm(self.now)));
+        self.ev.plugged = false;
+        self.ev.dynamic = None;
+    }
+
+    /// The user sets the app's "Temporary charging limit".
+    fn user_limits_charger(&mut self, amps: f64) {
+        self.log.push(format!(
+            "{} user sets a temporary limit of {amps} A",
+            hm(self.now)
+        ));
+        self.ev.dynamic = Some((amps, self.now + SignedDuration::from_hours(24)));
     }
 
     fn feed(&mut self, input: Input) {
@@ -198,6 +318,9 @@ impl Sim {
             }
             if let Output::WriteSetpoint { zone, value, .. } = &o {
                 self.thermostat_write(zone, value.value());
+            }
+            if let Output::WriteCharger { write, .. } = &o {
+                self.ev.dynamic = Some((write.current.value(), self.now + write.ttl));
             }
             if let Output::PublishStatus(s) = &o {
                 self.status = Some(s.clone());
@@ -257,6 +380,7 @@ impl Sim {
         while self.now < end {
             self.register += self.house_power() * STEP.as_secs_f64() / 3600.0;
             self.now += STEP;
+            self.ev.step(self.now);
             if HourStart::containing(self.now).start() == self.now {
                 self.feed(Input::MeterCumulative {
                     at: self.now,
@@ -269,6 +393,9 @@ impl Sim {
                     power: Kw::new(self.house_power()),
                 });
             }
+            if self.charger.is_some() && self.ev.polled && self.now.as_second() % 30 == 0 {
+                self.feed(Input::Charger(self.ev.reading(self.now)));
+            }
             if self.now.as_second() % 10 == 0 {
                 self.feed(Input::Tick { at: self.now });
             }
@@ -278,8 +405,16 @@ impl Sim {
     /// Restarts the engine from what the store would hold.
     fn restart(&mut self) {
         self.log.push(format!("{} restart", hm(self.now)));
-        self.engine = Engine::new(config(&self.floors), self.persisted.clone(), self.now);
+        self.engine = Engine::new(
+            config(&self.floors, self.charger),
+            self.persisted.clone(),
+            self.now,
+        );
         self.report_thermostats();
+    }
+
+    fn charger_writes(&self) -> usize {
+        self.count(|o| matches!(o, Output::WriteCharger { .. }))
     }
 
     fn writes(&self) -> usize {
@@ -294,6 +429,13 @@ impl Sim {
         self.count(|o| {
             matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard { event: GuardEvent::Shed { .. } }))
         })
+    }
+
+    fn count_before(&self, t: &str, f: impl Fn(&Output) -> bool) -> usize {
+        self.outputs
+            .iter()
+            .filter(|(at, o)| *at < ts(t) && f(o))
+            .count()
     }
 
     fn count(&self, f: impl Fn(&Output) -> bool) -> usize {
@@ -319,6 +461,16 @@ fn describe(now: Timestamp, o: &Output) -> Option<String> {
     match o {
         Output::WriteSetpoint { zone, value, .. } => Some(format!("{t} write {zone} {value}")),
         Output::WouldWrite { zone, value, .. } => Some(format!("{t} would write {zone} {value}")),
+        Output::WriteCharger { write, .. } => Some(format!(
+            "{t} write charger {} for {} min",
+            write.current,
+            write.ttl.as_mins()
+        )),
+        Output::WouldWriteCharger { write, .. } => Some(format!(
+            "{t} would write charger {} for {} min",
+            write.current,
+            write.ttl.as_mins()
+        )),
         Output::PersistEvent(e) => Some(format!(
             "{t} [{}] {}",
             e.mode,
@@ -336,6 +488,23 @@ fn describe(now: Timestamp, o: &Output) -> Option<String> {
                     event: GuardEvent::Release { zone, reason },
                 } => {
                     format!("release {zone} ({reason:?})")
+                }
+                EventKind::Guard {
+                    event:
+                        GuardEvent::ChargerLimit {
+                            current,
+                            saving,
+                            projected,
+                            limit,
+                        },
+                } => format!(
+                    "limit charger to {current} (saves {saving:.2}; projected {projected:.2}, limit {limit:.2})"
+                ),
+                EventKind::Guard {
+                    event: GuardEvent::ChargerRelease { reason },
+                } => format!("release charger ({reason:?})"),
+                EventKind::ChargerOverride { current, until } => {
+                    format!("charger override at {current} until {}", hm(*until))
                 }
                 EventKind::Guard {
                     event:
@@ -368,7 +537,9 @@ fn describe(now: Timestamp, o: &Output) -> Option<String> {
         | Output::PersistZoneHour { .. }
         | Output::PersistZoneStats { .. }
         | Output::PersistMode(_)
-        | Output::PersistShedAllowed { .. } => None,
+        | Output::PersistShedAllowed { .. }
+        | Output::PersistChargerWrite(_)
+        | Output::PersistChargerShedAllowed(_) => None,
     }
 }
 
@@ -681,5 +852,252 @@ fn s14_ev_charging_makes_the_limit_unreachable_and_says_so() {
         matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard { event: GuardEvent::LimitUnreachable { .. } }))
     });
     assert!(unreachable >= 1);
+    insta::assert_snapshot!(sim.snapshot());
+}
+
+// ---- EV charger (PLAN.md §9, E2) ----
+
+fn is_charger_limit(o: &Output) -> bool {
+    matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard { event: GuardEvent::ChargerLimit { .. } }))
+}
+
+fn hour_energy(sim: &Sim, hour: &str) -> f64 {
+    sim.outputs
+        .iter()
+        .rev()
+        .find_map(|(_, o)| match o {
+            Output::PersistHour(e) if e.hour == HourStart::containing(ts(hour)) => Some(e.kwh),
+            _ => None,
+        })
+        .unwrap()
+        .value()
+}
+
+fn charger_limit(sim: &Sim) -> Option<f64> {
+    sim.last_status()
+        .charger
+        .unwrap()
+        .limit
+        .map(|l| l.current().value())
+}
+
+/// A car plugged in at 15 A mid-evening: stepping the charger down is enough, and the
+/// floors stay warm.
+#[test]
+fn s15_ev_is_stepped_down_and_the_floors_stay_untouched() {
+    let mut sim = Sim::with_charger(
+        "2026-11-15T17:00:00Z",
+        Mode::Active,
+        ChargerConfig::default(),
+    );
+    sim.background = 0.3;
+    sim.run(mins(30));
+    sim.plug_in();
+    sim.run(mins(31));
+    let floor_sheds = sim.count_before("2026-11-15T18:00:00Z", |o| {
+        matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard { event: GuardEvent::Shed { .. } }))
+    });
+    assert_eq!(floor_sheds, 0, "no floor was shed this hour");
+    assert!(sim.charger_writes() >= 1);
+    assert!(hour_energy(&sim, "2026-11-15T17:00:00Z") <= 5.0);
+    insta::assert_snapshot!(sim.snapshot());
+}
+
+/// A car at 15 A on top of a cold house: the charger is limited first, and floors are shed
+/// only for what it can't cover even at 6 A. After the car is full the floors come back before the charger is released.
+#[test]
+fn s16_floors_are_shed_only_after_the_charger_reaches_its_floor() {
+    let mut sim = Sim::with_charger(
+        "2026-11-15T17:00:00Z",
+        Mode::Active,
+        ChargerConfig::default(),
+    );
+    sim.plug_in();
+    sim.run(mins(30));
+    let first_charger = sim
+        .outputs
+        .iter()
+        .position(|(_, o)| is_charger_limit(o))
+        .unwrap();
+    let first_floor = sim
+        .outputs
+        .iter()
+        .position(|(_, o)| matches!(o, Output::PersistEvent(e) if matches!(e.kind, EventKind::Guard { event: GuardEvent::Shed { .. } })))
+        .unwrap();
+    assert!(first_charger < first_floor);
+    // 6 A plus the floors is still 0.98 kW too much, so a floor has to go; with bathroom
+    // shed, 7 A is enough.
+    assert_eq!(charger_limit(&sim), Some(7.0));
+    sim.ev.demand = 0.0;
+    sim.run(mins(40));
+    assert!(hour_energy(&sim, "2026-11-15T17:00:00Z") <= 5.0);
+    assert_eq!(charger_limit(&sim), None, "released once there is room");
+    assert!(sim.last_status().zones.iter().all(|z| !z.shed));
+    insta::assert_snapshot!(sim.snapshot());
+}
+
+/// The same evening with pausing allowed: the charger is paused instead of shedding floors.
+#[test]
+fn s17_pausing_when_allowed_spares_the_floors() {
+    let run = |pause_allowed| {
+        let cfg = ChargerConfig {
+            pause_allowed,
+            ..ChargerConfig::default()
+        };
+        let mut sim = Sim::with_charger("2026-11-15T17:00:00Z", Mode::Active, cfg);
+        sim.plug_in();
+        sim.run(mins(60));
+        sim
+    };
+    let paused = run(true);
+    let at_six = run(false);
+    assert!(
+        paused.sheds() < at_six.sheds(),
+        "{} vs {}",
+        paused.sheds(),
+        at_six.sheds()
+    );
+    assert!(
+        paused
+            .log
+            .iter()
+            .any(|l| l.contains("limit charger to 0 A"))
+    );
+    assert!(
+        !at_six
+            .log
+            .iter()
+            .any(|l| l.contains("limit charger to 0 A"))
+    );
+    insta::assert_snapshot!(paused.snapshot());
+}
+
+/// Easee stops answering: the charger is released by the guard (its limit expires by
+/// itself) and the floors carry the load.
+#[test]
+fn s18_a_stale_charger_leaves_the_floors_to_guard_alone() {
+    let mut sim = Sim::with_charger(
+        "2026-11-15T17:00:00Z",
+        Mode::Active,
+        ChargerConfig::default(),
+    );
+    sim.background = 0.3;
+    sim.run(mins(20));
+    sim.plug_in();
+    sim.run(mins(5));
+    assert!(charger_limit(&sim).is_some());
+    sim.ev.polled = false;
+    // The last reading stays fresh for 3 minutes (a refresh may still go out); after that
+    // nothing reaches the charger, and its limit expires by itself.
+    sim.run(mins(4));
+    let writes = sim.charger_writes();
+    sim.run(mins(30));
+    assert_eq!(
+        sim.charger_writes(),
+        writes,
+        "nothing is written to an unreachable charger"
+    );
+    assert!(
+        sim.log
+            .iter()
+            .any(|l| l.contains("release charger (ChargerUnavailable)"))
+    );
+    assert!(sim.sheds() > 0);
+    insta::assert_snapshot!(sim.snapshot());
+}
+
+/// Observe mode with the car charging: nothing is written, the charger would be limited,
+/// and the floors are not shed more than in active mode.
+#[test]
+fn s19_observe_mode_with_the_ev_does_not_cascade() {
+    let run = |mode| {
+        let mut sim = Sim::with_charger("2026-11-15T17:00:00Z", mode, ChargerConfig::default());
+        sim.plug_in();
+        sim.run(mins(60));
+        sim
+    };
+    let observe = run(Mode::Observe);
+    let active = run(Mode::Active);
+    assert_eq!(observe.charger_writes() + observe.writes(), 0);
+    assert!(observe.count(|o| matches!(o, Output::WouldWriteCharger { .. })) > 0);
+    assert!(
+        observe.sheds() <= active.sheds(),
+        "{} vs {}",
+        observe.sheds(),
+        active.sheds()
+    );
+    insta::assert_snapshot!(observe.snapshot());
+}
+
+/// Unplugging clears the charger's limit by itself: no release write, no retries.
+#[test]
+fn s20_unplugging_a_limited_car_needs_no_write() {
+    let mut sim = Sim::with_charger(
+        "2026-11-15T17:00:00Z",
+        Mode::Active,
+        ChargerConfig::default(),
+    );
+    sim.plug_in();
+    sim.run(mins(10));
+    assert!(charger_limit(&sim).is_some());
+    sim.unplug();
+    let writes = sim.charger_writes();
+    sim.run(mins(30));
+    assert_eq!(sim.charger_writes(), writes);
+    assert_eq!(charger_limit(&sim), None);
+    assert_eq!(sim.persisted.charger.last_write, None);
+    insta::assert_snapshot!(sim.snapshot());
+}
+
+/// The user sets a temporary limit in the app while the guard limits the charger: the guard
+/// leaves the charger alone (no write over the user's limit) and sheds floors instead.
+#[test]
+fn s21_a_temporary_limit_from_the_app_is_an_override() {
+    let mut sim = Sim::with_charger(
+        "2026-11-15T17:00:00Z",
+        Mode::Active,
+        ChargerConfig::default(),
+    );
+    sim.plug_in();
+    sim.run(mins(10));
+    sim.user_limits_charger(12.0);
+    let writes = sim.charger_writes();
+    sim.run(mins(30));
+    assert_eq!(sim.charger_writes(), writes);
+    let status = sim.last_status().charger.unwrap();
+    assert_eq!(status.limit, None);
+    assert_eq!(status.override_until, Some(ts("2026-11-15T19:10:30Z")));
+    assert!(sim.sheds() > 0);
+    insta::assert_snapshot!(sim.snapshot());
+}
+
+/// Leaving active mode releases the charger at once; a restart mid-limit keeps it.
+#[test]
+fn s22_restart_keeps_and_leaving_active_releases_the_charger_limit() {
+    let mut sim = Sim::with_charger(
+        "2026-11-15T17:00:00Z",
+        Mode::Active,
+        ChargerConfig::default(),
+    );
+    sim.plug_in();
+    sim.run(mins(10));
+    let limited = charger_limit(&sim);
+    assert!(limited.is_some());
+    let writes = sim.charger_writes();
+    sim.restart();
+    sim.run(mins(1));
+    assert_eq!(
+        sim.charger_writes(),
+        writes,
+        "no release-then-limit flapping"
+    );
+    assert_eq!(charger_limit(&sim), limited);
+    sim.set_mode(Mode::Observe);
+    assert_eq!(sim.charger_writes(), writes + 1);
+    assert!(sim.log.last().unwrap().contains("mode active -> observe"));
+    assert!(
+        sim.ev.offered(sim.now) >= 15.0,
+        "back to the app's own limit"
+    );
     insta::assert_snapshot!(sim.snapshot());
 }

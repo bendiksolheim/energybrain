@@ -1,7 +1,7 @@
 ---
 source: crates/core/src/charger.rs
-assertion_line: 288
-expression: "serde_json::to_string_pretty(&c.status(now)).unwrap()"
+assertion_line: 826
+expression: "serde_json::to_string_pretty(&c.status(now, limit)).unwrap()"
 ---
 {
   "freshness": "fresh",
@@ -30,5 +30,14 @@ expression: "serde_json::to_string_pretty(&c.status(now)).unwrap()"
       "unit": "A"
     },
     "connected": true
-  }
+  },
+  "limit": {
+    "type": "limit",
+    "current": {
+      "value": 10.0,
+      "unit": "A"
+    }
+  },
+  "shed_allowed": true,
+  "override_until": null
 }

@@ -195,7 +195,12 @@ impl Translator {
                 .into_iter()
                 .collect(),
             Output::PublishStatus(status) => self.status(status),
+            // Charger writes go to Easee, not MQTT (PLAN.md §9).
             Output::WouldWrite { .. }
+            | Output::WriteCharger { .. }
+            | Output::WouldWriteCharger { .. }
+            | Output::PersistChargerWrite(_)
+            | Output::PersistChargerShedAllowed(_)
             | Output::PersistHour(_)
             | Output::PersistZoneWrite { .. }
             | Output::PersistZoneBase { .. }

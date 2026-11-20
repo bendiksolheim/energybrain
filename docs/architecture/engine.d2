@@ -14,7 +14,7 @@ inputs: Input {
   class: msg
   meter_in: "MeterPower\nMeterCumulative" {class: msg}
   zone_in: "ThermostatSetpoint\nZonePower · ZoneEnergy" {class: msg}
-  charger_in: "Charger\n(Easee poll)" {class: msg}
+  charger_in: "Charger (Easee poll)\nSetChargerShedAllowed" {class: msg}
   user_in: "SetMode\nSetShedAllowed" {class: msg}
   tick: "Tick" {class: msg}
 }
@@ -25,12 +25,12 @@ engine: "Engine (single owner of all state)" {
   meter: "Meter\npower integral + register\n→ hour energy" {class: pure}
   zones: "Zones\nbase setpoint, echo detection,\nlearned heating power" {class: pure}
   mode: "Mode\nActive · Observe · Off" {class: pure}
-  charger: "Charger (optional)\nlatest reading, freshness" {class: pure}
+  charger: "Charger (optional)\nreading, override detection,\nTTL writes / refresh / retry" {class: pure}
 
   pipeline: "on Tick" {
     class: pure
     peaks: "Peaks + tariff\nhour limit" {class: pure}
-    guard: "Guard\nprojection vs limit\n→ shed / release zones" {class: pure}
+    guard: "Guard\nprojection vs limit\n→ limit charger first,\nthen shed / release zones" {class: pure}
     policies: "Policies\nbase · guard caps\n· manual override" {class: pure}
     arbiter: "Arbiter\none decision per zone" {class: pure}
     actuator: "Actuator\ndeadband, min_interval,\nmode decides write" {class: pure}
@@ -45,14 +45,16 @@ engine: "Engine (single owner of all state)" {
   zones -> pipeline.guard: "power, shed_allowed"
   zones -> pipeline.policies: "base, override"
   mode -> pipeline.actuator
-  charger -> pipeline: "status only (guard: E2)"
+  charger -> pipeline.guard: "draw, ceiling, override"
+  pipeline.guard -> charger: "target (A / pause)"
 }
 
 outputs: Output {
   class: msg
   write: "WriteSetpoint (Active)\nWouldWrite (Observe)" {class: out}
+  charger_write: "WriteCharger (Active)\nWouldWriteCharger (Observe)" {class: out}
   status: "PublishStatus" {class: out}
-  persist: "Persist*\nhour · zone · mode · event" {class: out}
+  persist: "Persist*\nhour · zone · mode · event · charger" {class: out}
 }
 
 inputs.meter_in -> engine.meter
@@ -63,6 +65,7 @@ inputs.user_in -> engine.zones: shed_allowed
 inputs.tick -> engine.pipeline.peaks
 
 engine.pipeline.actuator -> outputs.write
+engine.charger -> outputs.charger_write
 engine.pipeline -> outputs.status
 engine.pipeline.guard -> outputs.persist: events
 engine.meter -> outputs.persist: hours

@@ -1,0 +1,21 @@
+---
+source: crates/core/src/scenarios.rs
+assertion_line: 974
+expression: paused.snapshot()
+---
+11-15 17:00:00Z car plugged in
+11-15 17:00:30Z [active] limit charger to 14 A (saves 0.23 kW; projected 4.85 kWh, limit 4.70 kWh)
+11-15 17:00:30Z write charger 14 A for 10 min
+11-15 17:02:30Z [active] limit charger to 0 A (saves 3.22 kW; projected 7.53 kWh, limit 4.70 kWh)
+11-15 17:02:30Z write charger 0 A for 10 min
+11-15 17:07:30Z write charger 0 A for 10 min
+11-15 17:12:30Z write charger 0 A for 10 min
+11-15 17:17:30Z write charger 0 A for 10 min
+11-15 17:22:30Z write charger 0 A for 10 min
+11-15 17:27:30Z write charger 0 A for 10 min
+11-15 17:32:30Z write charger 0 A for 10 min
+11-15 17:37:30Z write charger 0 A for 10 min
+11-15 17:42:30Z write charger 0 A for 10 min
+11-15 17:47:30Z write charger 0 A for 10 min
+11-15 17:52:30Z write charger 0 A for 10 min
+11-15 17:57:30Z write charger 0 A for 10 min

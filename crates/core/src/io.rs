@@ -2,7 +2,7 @@
 
 use jiff::Timestamp;
 
-use crate::charger::{ChargerReading, ChargerStatus};
+use crate::charger::{ChargerReading, ChargerStatus, ChargerWrite, ChargerWriteRecord};
 use crate::energy::{Freshness, HourEnergy};
 use crate::guard::{GuardEvent, GuardStatus};
 use crate::ids::ZoneId;
@@ -11,7 +11,7 @@ use crate::peaks::{DayPeak, HourLimit};
 use crate::policy::Reason;
 use crate::tariff::Tier;
 use crate::time::HourStart;
-use crate::units::{Celsius, Kw, Kwh};
+use crate::units::{Ampere, Celsius, Kw, Kwh};
 use crate::zone::Override;
 
 /// Something that happened in the outside world.
@@ -60,6 +60,11 @@ pub enum Input {
     },
     /// A poll of the EV charger.
     Charger(ChargerReading),
+    /// The user allowed or forbade limiting the charger.
+    SetChargerShedAllowed {
+        /// Whether limiting is allowed.
+        allowed: bool,
+    },
     /// The user changed the mode.
     SetMode {
         /// When.
@@ -102,6 +107,24 @@ pub enum Output {
         /// Why.
         reasons: Vec<Reason>,
     },
+    /// Set the charger's dynamic current (active mode only).
+    WriteCharger {
+        /// The limit and its time to live.
+        write: ChargerWrite,
+        /// Why.
+        reason: String,
+    },
+    /// Observe mode: this charger write would have happened.
+    WouldWriteCharger {
+        /// The limit and its time to live.
+        write: ChargerWrite,
+        /// Why.
+        reason: String,
+    },
+    /// Store our last charger write, or clear it once released.
+    PersistChargerWrite(Option<ChargerWriteRecord>),
+    /// Store the charger's runtime shed permission.
+    PersistChargerShedAllowed(bool),
     /// Publish the current status (MQTT, HTTP, metrics).
     PublishStatus(Box<Status>),
     /// Store an hour's energy (upsert).
@@ -186,6 +209,13 @@ pub enum EventKind {
         /// `"value": {"value": …}`).
         #[serde(rename = "setpoint")]
         value: Celsius,
+        /// When it ends.
+        until: Timestamp,
+    },
+    /// The user set a temporary limit on the charger: the guard leaves it alone.
+    ChargerOverride {
+        /// The user's limit.
+        current: Ampere,
         /// When it ends.
         until: Timestamp,
     },
@@ -342,7 +372,7 @@ mod tests {
     use jiff::civil::date;
 
     use super::*;
-    use crate::charger::ChargerMode;
+    use crate::charger::{ChargerMode, ChargerTarget};
     use crate::energy::Quality;
     use crate::guard::ReleaseReason;
     use crate::peaks::LimitBasis;
@@ -420,6 +450,9 @@ mod tests {
                     offered: Ampere::new(10.0),
                     connected: true,
                 }),
+                limit: Some(ChargerTarget::Limit(Ampere::new(10.0))),
+                shed_allowed: true,
+                override_until: None,
             }),
         }
     }
@@ -492,6 +525,23 @@ mod tests {
                 until: ts("2026-11-15T19:20:00Z"),
             },
             EventKind::OverrideExpired { zone: zone() },
+            EventKind::Guard {
+                event: GuardEvent::ChargerLimit {
+                    current: Ampere::new(9.0),
+                    saving: Kw::new(1.4),
+                    projected: Kwh::new(5.4),
+                    limit: Kwh::new(4.7),
+                },
+            },
+            EventKind::Guard {
+                event: GuardEvent::ChargerRelease {
+                    reason: ReleaseReason::CarDisconnected,
+                },
+            },
+            EventKind::ChargerOverride {
+                current: Ampere::new(8.0),
+                until: ts("2026-11-15T19:20:00Z"),
+            },
             EventKind::ModeChanged {
                 from: Mode::Active,
                 to: Mode::Off,
@@ -520,6 +570,7 @@ mod tests {
             json(&ReleaseReason::MeterStale),
             json(&ReleaseReason::NotSheddable),
             json(&ReleaseReason::GuardOff),
+            json(&ReleaseReason::ChargerUnavailable),
             json(&PolicyName::UserSetpointBase),
             json(&PolicyName::ManualOverride),
             json(&Mode::Active),
@@ -529,7 +580,7 @@ mod tests {
         ];
         assert_eq!(
             all.join(" "),
-            r#""idle" "limit_unreachable" "meter_stale" "disabled" "no_data" "stale" "meter_stale" "not_sheddable" "guard_off" "user_setpoint_base" "manual_override" "active" "estimated" "interpolated" "measured""#
+            r#""idle" "limit_unreachable" "meter_stale" "disabled" "no_data" "stale" "meter_stale" "not_sheddable" "guard_off" "charger_unavailable" "user_setpoint_base" "manual_override" "active" "estimated" "interpolated" "measured""#
         );
         let e = crate::energy::HourEnergy {
             hour: HourStart::containing(ts("2026-11-15T17:00:00Z")),

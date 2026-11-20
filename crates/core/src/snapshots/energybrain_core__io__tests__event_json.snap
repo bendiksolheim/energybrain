@@ -1,6 +1,6 @@
 ---
 source: crates/core/src/io.rs
-assertion_line: 383
+assertion_line: 558
 expression: json(&events)
 ---
 [
@@ -80,6 +80,55 @@ expression: json(&events)
     "kind": {
       "type": "override_expired",
       "zone": "bathroom"
+    }
+  },
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "guard",
+      "event": {
+        "type": "charger_limit",
+        "current": {
+          "value": 9.0,
+          "unit": "A"
+        },
+        "saving": {
+          "value": 1.4,
+          "unit": "kW"
+        },
+        "projected": {
+          "value": 5.4,
+          "unit": "kWh"
+        },
+        "limit": {
+          "value": 4.7,
+          "unit": "kWh"
+        }
+      }
+    }
+  },
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "guard",
+      "event": {
+        "type": "charger_release",
+        "reason": "car_disconnected"
+      }
+    }
+  },
+  {
+    "at": "2026-11-15T17:20:00Z",
+    "mode": "active",
+    "kind": {
+      "type": "charger_override",
+      "current": {
+        "value": 8.0,
+        "unit": "A"
+      },
+      "until": "2026-11-15T19:20:00Z"
     }
   },
   {

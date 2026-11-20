@@ -239,3 +239,11 @@ keep it up to date if a decision changes.
   SVG, and d2 ≥ 0.9 rasterises PNG itself, so no rsvg/chafa). Layout engine is ELK. `d2` is a
   dev tool, not a Rust dependency. A test in the app crate checks every crate has a box in
   `system.d2`.
+- EV charger (PLAN.md §9): the charger is the guard's first stage, controlled only through
+  Easee's TTL'd dynamic current (`ChargerWrite { current, ttl }`; release = `max_current` for
+  1 min; pause = 0 A, off by default). Power per amp is configured (230 V × phases), not
+  learned. A dynamic current below the user's charger limit that isn't one of our last two
+  writes and isn't 0 is the user's temporary limit → override (2 h or until unplugged), never
+  written over. The guard's car model: `draw = min(demand, current × V)`, where `demand` is the
+  reported draw unless the car draws exactly what the limit allows (then the ceiling). Raises
+  wait for `restore_stagger` like zone releases.

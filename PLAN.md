@@ -847,8 +847,9 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
   at a time.
 - **Hysteresis for the car:**
   - whole amps only;
-  - at most one change per `min_change_interval` (default 2 min). Lowering may bypass
-    this once if the projection is over the *allowed* limit, not just the effective one;
+  - at most one change per `min_change_interval` (default 2 min), with no bypass (dropped
+    in E2: a change may jump straight to the needed level, and while it waits the charger's
+    possible saving still counts against the excess, so floors aren't shed for it);
   - a pause is held at least `min_pause` (default 15 min);
   - at most `max_pauses_per_hour` (default 2). After that, 6 A is the floor for the rest of
     the hour.
@@ -896,29 +897,37 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
   the limit. 401 refreshes the token once, then logs in again. Tokens live in memory only
   (a restart logs in again). Credentials sit in the gitignored config, like the MQTT ones.
 
-### Core changes
-- `Input::Charger(ChargerReading { at, mode: ChargerMode, power: Kw, session: Kwh,
-  dynamic_current: Option<Ampere>, max_current: Option<Ampere>, offered: Ampere,
-  connected: bool })`, one per poll.
-- `Input::SetChargerShedAllowed(bool)`.
-- Outputs:
-  - `LimitCharger { limit: ChargerLimit, ttl }` with `ChargerLimit::Amps(Ampere)
-    | Pause | Release`;
-  - `PersistChargerState { limit, at }` (startup safety);
-  - `PersistChargerShedAllowed`.
-- `ChargerMode` mirrors the op-mode table. An unknown number is kept as
-  `ChargerMode::Unknown(u8)` and treated as "not charging". No `_ =>` arms on our own
-  enums.
-- Status and events gain a `charger` section (mode, power, offered/limited amps,
-  reasons, would-write). This changes the insta snapshots of `/api/state`, MQTT status and
-  events. Event kinds: `ChargerLimited`, `ChargerReleased`, `WouldLimitCharger`,
-  `ChargerCommandFailed`.
-- `GuardState` gains a charger stage before the zone loop. The proptests extend to: the
-  charger is never written in `Observe`/`Off`; the offered current is always `0` or within
-  `[min_current, max_current]`; no more than one change per `min_change_interval` except
-  the documented bypass.
-- Startup safety: a persisted limit that hasn't expired yet is kept if the guard still
-  wants it this hour, otherwise released. An expired one needs nothing.
+### Core changes (as built in E1–E2)
+- `core::charger`: `ChargerMode`, `ChargerReading`, `ChargerTarget::{Limit(Ampere), Pause}`,
+  `ChargerWrite { current, ttl }` (what the Easee command takes), `ChargerWriteRecord`
+  (persisted), `ChargerOverride`, `ChargerConfig`, and `Charger` (latest reading, override
+  detection, and the charger's own actuator: TTL writes, refresh at `ttl / 2`, retry when a
+  write isn't confirmed by observation 48 within `min_change_interval`, release = write
+  `max_current` for 1 min, forget without writing on unplug or override).
+- `Input::Charger(ChargerReading)`, `Input::SetChargerShedAllowed { allowed }`.
+- Outputs: `WriteCharger { write, reason }`, `WouldWriteCharger { write, reason }`,
+  `PersistChargerWrite(Option<ChargerWriteRecord>)` (startup safety; `None` once released),
+  `PersistChargerShedAllowed(bool)`. The store keeps both in `settings` (`charger_write` =
+  `"<amps> <at> <until>"`, `charger_shed_allowed` = `1`/`0`); no migration.
+- Events: `GuardEvent::ChargerLimit { current, saving, projected, limit }` (lowering, a pause
+  = 0 A, or a raise with negative saving), `GuardEvent::ChargerRelease { reason }`,
+  `EventKind::ChargerOverride { current, until }`. `ReleaseReason` gains `CarDisconnected`
+  and `ChargerUnavailable`. No `ChargerCommandFailed` event: a rejected command can only be
+  seen by the adapter, which logs it (E3); the actuator retries unconfirmed writes anyway.
+- `Status::charger` (`ChargerStatus`): freshness, availability, latest reading, the guard's
+  `limit`, `shed_allowed`, `override_until`.
+- `GuardState` gains `charger: Option<ChargerShed>` and a pause counter. The guard's model
+  of the car: it draws `min(demand, current × V)`. `demand` is its own reported draw, unless
+  it draws what the limit allows: then the limit holds it back and `demand` is assumed to be
+  the ceiling (the user's charger limit). So a full car (drawing nothing) is released quickly,
+  and raises are conservative otherwise.
+- A raise waits for `restore_stagger` after the last release, like zone releases (s16: a raise
+  10 s after a floor came back made the guard shed the floor again).
+- Startup safety: in `Active` a persisted limit still in force is taken back into the guard,
+  which keeps it until the first poll (no release-then-limit flapping, s22), then decides as
+  usual. An expired one is just forgotten.
+- Proptest: the target is always a pause (only when allowed) or whole amps in
+  `[min_current, ceiling)`, and changes at most once per `min_change_interval`.
 
 ### Adapter: `energybrain-easee`
 Same split as the MQTT crate:
@@ -972,16 +981,18 @@ E3), `Status::charger` (`null` without a charger). Outputs, events and `ChargerL
 to E2, where they are first produced, so nothing downstream has to handle variants that
 never occur.
 
-**E2 — Guard + actuator.** Charger stage in `GuardState`, observe-mode credit, hysteresis
+**E2 — Guard + actuator. ✅** Charger stage in `GuardState`, observe-mode credit, hysteresis
 and pause rules, TTL refresh, echo confirmation, leave-Active/shutdown release, startup
-safety. Scenarios:
+safety. Scenarios s15–s22 in `core/src/scenarios.rs` (a simulated car that follows its
+offer 20 s later, polled every 30 s):
 1. EV at 15 A in a cold evening → stepped down, floors untouched;
 2. EV + floors over budget at 6 A → floors shed after the charger;
 3. pause disallowed vs allowed;
 4. charger stale → floors only;
 5. observe mode with the EV → no write, would-limit events, floors not over-shed;
 6. car unplugged while limited → no retry storm.
-7. temporary limit set in the app while limited → override, charger left alone, floors shed.
+7. temporary limit set in the app while limited → override, charger left alone, floors shed;
+8. restart mid-limit keeps it; leaving Active releases it.
 
 **E3 — `energybrain-easee` + config.** Auth/refresh/re-login, polling, commands, backoff,
 tested against an `axum` fake; `[ev]` config with validation; `config/example.toml`.

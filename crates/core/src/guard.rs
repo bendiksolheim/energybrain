@@ -16,16 +16,26 @@
 //! 5. Below the limit, the most recently shed zone is released once it has been shed for
 //!    `min_shed_duration`, the projection *with it back on* stays below
 //!    `limit − release_margin`, and `restore_stagger` has passed since the last release.
+//!
+//! The EV charger (PLAN.md §9) comes before the floors. Above the limit its current is
+//! lowered to what the excess needs (whole amps, down to `min_current`, or a pause if
+//! allowed), at most once per `min_change_interval`; floors are shed only for what the
+//! charger can't cover even at its floor. It is raised again only once no floor is shed, by
+//! at most `max_raise_step` amps at a time, and released when it reaches the ceiling. Its
+//! credit works like a zone's: while the car still draws more than its limit allows (observe
+//! mode, or before the next poll shows the change), the whole saving to the end of the hour
+//! is credited; once it shows, only for `settle`.
 
 use std::collections::BTreeMap;
 
 use jiff::{SignedDuration, Timestamp};
 
+use crate::charger::{Charger, ChargerMode, ChargerReading, ChargerTarget};
 use crate::energy::{Freshness, MeterSnapshot};
 use crate::ids::ZoneId;
 use crate::peaks::HourLimit;
 use crate::time::HourStart;
-use crate::units::{Kw, Kwh};
+use crate::units::{Ampere, Kw, Kwh};
 use crate::zone::{Zone, ZoneSettings};
 
 /// Guard tuning.
@@ -62,6 +72,24 @@ pub struct Shed {
     /// Its load estimate when shed; the expected reduction and comeback load.
     pub load: Kw,
     /// Why it was shed.
+    pub reason: String,
+}
+
+/// A car drawing at most this much above its limit is taken to have followed it.
+const EFFECT_TOLERANCE: Kw = Kw::new(0.3);
+
+/// The charger while the guard limits it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChargerShed {
+    /// The limit in force.
+    pub target: ChargerTarget,
+    /// When the guard first limited it.
+    pub since: Timestamp,
+    /// When the limit last changed.
+    pub changed: Timestamp,
+    /// The drop in the car's draw expected from the last change (negative for a raise).
+    pub step: Kw,
+    /// Why.
     pub reason: String,
 }
 
@@ -121,6 +149,10 @@ pub enum ReleaseReason {
     NotSheddable,
     /// The guard was turned off.
     GuardOff,
+    /// The car was unplugged (which clears the charger's limit by itself).
+    CarDisconnected,
+    /// No fresh reading from the charger, or it is offline.
+    ChargerUnavailable,
 }
 
 /// Something the guard did, for the event log.
@@ -142,6 +174,22 @@ pub enum GuardEvent {
     Release {
         /// The zone.
         zone: ZoneId,
+        /// Why.
+        reason: ReleaseReason,
+    },
+    /// The charger's limit was set or changed (0 A is a pause).
+    ChargerLimit {
+        /// The new limit.
+        current: Ampere,
+        /// The drop in the car's draw this is expected to give (negative for a raise).
+        saving: Kw,
+        /// Projection (after credits) when it was decided.
+        projected: Kwh,
+        /// Effective limit.
+        limit: Kwh,
+    },
+    /// The charger's limit was removed.
+    ChargerRelease {
         /// Why.
         reason: ReleaseReason,
     },
@@ -169,6 +217,8 @@ pub struct GuardInput<'a> {
     pub zones: &'a BTreeMap<ZoneId, Zone>,
     /// Zone settings (heating threshold).
     pub settings: &'a ZoneSettings,
+    /// The EV charger, if there is one.
+    pub charger: Option<&'a Charger>,
     /// False when the mode is `Off`.
     pub enabled: bool,
 }
@@ -185,6 +235,10 @@ pub struct GuardState {
     /// Savings of zones released while still drawing (observe mode), for the hour they
     /// belong to. The meter never saw them, so they stay credited until the hour ends.
     pub banked: Option<(HourStart, Kwh)>,
+    /// The charger, while limited.
+    pub charger: Option<ChargerShed>,
+    /// Pauses of the charger in an hour.
+    pub pauses: Option<(HourStart, u8)>,
 }
 
 impl GuardState {
@@ -219,6 +273,11 @@ impl GuardState {
                 reason,
             });
         }
+        if self.charger.is_some()
+            && let Some(reason) = Self::charger_drop(input, reason)
+        {
+            self.release_charger(input, reason, &mut events);
+        }
         if !input.enabled {
             self.status = GuardStatus::Disabled;
             return events;
@@ -252,7 +311,7 @@ impl GuardState {
             })
             .sum();
         let banked = self.banked.map_or(Kwh::ZERO, |(_, k)| k);
-        let projected = raw - credit - banked;
+        let projected = raw - credit - self.charger_credit(input, remaining) - banked;
         let limit = input.limit.effective;
 
         if projected > limit {
@@ -264,6 +323,9 @@ impl GuardState {
             {
                 self.release_staggered(cfg, input, ReleaseReason::BelowLimit, &mut events);
             }
+            self.status = self.settled_status();
+        } else if self.charger.is_some() {
+            self.raise_charger(cfg, input, projected, limit, &mut events);
             self.status = self.settled_status();
         } else {
             self.status = GuardStatus::Idle;
@@ -280,6 +342,7 @@ impl GuardState {
         events: &mut Vec<GuardEvent>,
     ) {
         let now = input.now;
+        let charger = self.limit_charger(input, projected, limit, events);
         let mut candidates: Vec<&Zone> = input
             .zones
             .values()
@@ -287,9 +350,9 @@ impl GuardState {
             .collect();
         candidates.sort_by_key(|z| (z.config.priority, z.id().clone()));
         let reduction = |z: &Zone| z.load().for_one_hour() * remaining;
-        let available: Kwh = candidates.iter().map(|z| reduction(z)).sum();
-        let mut excess = projected - limit;
-        let unreachable = available < excess;
+        let available = charger + candidates.iter().map(|z| reduction(z)).sum::<Kwh>();
+        let mut excess = projected - limit - charger;
+        let unreachable = available < projected - limit;
         for z in candidates {
             if excess <= Kwh::ZERO {
                 break;
@@ -343,6 +406,9 @@ impl GuardState {
                 zone: s.zone,
                 reason,
             });
+        } else if self.charger.is_some() {
+            self.last_release = Some(now);
+            self.release_charger(input, reason, events);
         }
     }
 
@@ -354,18 +420,258 @@ impl GuardState {
             .is_some_and(|z| z.is_drawing(input.settings));
         if drawing {
             let hour = input.meter.hour;
-            let saved = s.load * input.now.duration_since(s.since.max(hour.start()));
-            let total = self.banked.map_or(Kwh::ZERO, |(_, k)| k) + saved.max(Kwh::ZERO);
-            self.banked = Some((hour, total));
+            self.add_banked(
+                hour,
+                s.load * input.now.duration_since(s.since.max(hour.start())),
+            );
         }
     }
 
+    fn add_banked(&mut self, hour: HourStart, saved: Kwh) {
+        let total = self.banked.map_or(Kwh::ZERO, |(_, k)| k) + saved.max(Kwh::ZERO);
+        self.banked = Some((hour, total));
+    }
+
+    /// The charger and its latest reading, if both exist.
+    fn ev<'a>(input: &GuardInput<'a>) -> Option<(&'a Charger, ChargerReading)> {
+        input.charger.and_then(|c| c.reading.map(|r| (c, r)))
+    }
+
+    /// Why a limited charger must be released now, if it must. `off_reason` applies when
+    /// the guard is off or limiting is no longer allowed.
+    fn charger_drop(input: &GuardInput<'_>, off_reason: ReleaseReason) -> Option<ReleaseReason> {
+        let now = input.now;
+        match Self::ev(input) {
+            _ if !input.enabled => Some(off_reason),
+            // Just restarted: no poll yet. Keep our limit while it is still in force.
+            None if input.charger.is_some_and(|c| {
+                c.reading.is_none() && c.last_write.is_some_and(|w| w.until > now)
+            }) =>
+            {
+                None
+            }
+            None if input.charger.is_some() => Some(ReleaseReason::ChargerUnavailable),
+            None => Some(ReleaseReason::NotSheddable),
+            Some((c, _)) if !c.sheddable(now) => Some(off_reason),
+            Some((_, r)) if !r.mode.car_connected() => Some(ReleaseReason::CarDisconnected),
+            Some((c, _)) if !c.available(now) => Some(ReleaseReason::ChargerUnavailable),
+            Some(_) => None,
+        }
+    }
+
+    fn release_charger(
+        &mut self,
+        input: &GuardInput<'_>,
+        reason: ReleaseReason,
+        events: &mut Vec<GuardEvent>,
+    ) {
+        self.bank_charger(input);
+        self.charger = None;
+        events.push(GuardEvent::ChargerRelease { reason });
+    }
+
+    /// Credit for the charger's limit while the meter can't show it yet (see the module docs).
+    fn charger_credit(&self, input: &GuardInput<'_>, remaining: f64) -> Kwh {
+        let (Some(s), Some((c, r))) = (&self.charger, Self::ev(input)) else {
+            return Kwh::ZERO;
+        };
+        let hour = input.meter.hour;
+        if !effective(c, &r, s) {
+            over_limit(c, &r, s) * hour.end().duration_since(s.changed.max(hour.start()))
+        } else if input.now.duration_since(s.changed) < c.config.settle {
+            s.step.for_one_hour() * remaining
+        } else {
+            Kwh::ZERO
+        }
+    }
+
+    /// Banks what the limit saved since its last change if the meter never saw it (the car
+    /// still draws more than the limit allows), before the limit changes or goes.
+    fn bank_charger(&mut self, input: &GuardInput<'_>) {
+        if let (Some(s), Some((c, r))) = (&self.charger, Self::ev(input))
+            && !effective(c, &r, s)
+        {
+            let hour = input.meter.hour;
+            let saved =
+                over_limit(c, &r, s) * input.now.duration_since(s.changed.max(hour.start()));
+            self.add_banked(hour, saved);
+        }
+    }
+
+    /// Lowers the charger's limit if the excess needs it and the charger may change, and
+    /// returns what the charger can save by the end of the hour at its floor (counted
+    /// against the excess even while a change has to wait).
+    fn limit_charger(
+        &mut self,
+        input: &GuardInput<'_>,
+        projected: Kwh,
+        limit: Kwh,
+        events: &mut Vec<GuardEvent>,
+    ) -> Kwh {
+        let now = input.now;
+        let hour = input.meter.hour;
+        let Some((c, r)) = Self::ev(input) else {
+            return Kwh::ZERO;
+        };
+        let limited = self.charger.clone();
+        let charging = limited.is_some()
+            || (r.mode == ChargerMode::Charging && r.power > c.config.charging_threshold);
+        if !(charging && c.available(now) && c.sheddable(now)) {
+            return Kwh::ZERO;
+        }
+        let level = limited.as_ref().map_or(c.ceiling(), |s| s.target.current());
+        let est = r.power.min(c.power_at(level));
+        let pauses = self
+            .pauses
+            .filter(|(h, _)| *h == hour)
+            .map_or(0, |(_, n)| n);
+        let pause_ok = c.config.pause_allowed
+            && (pauses < c.config.max_pauses_per_hour || level == Ampere::ZERO);
+        let floor = if pause_ok {
+            Ampere::ZERO
+        } else {
+            c.config.min_current
+        };
+        let saving_at = |current: Ampere| est - est.min(c.power_at(current));
+        let left = hour.end().duration_since(now);
+        let cover = saving_at(floor) * left;
+        let may_change = limited
+            .as_ref()
+            .is_none_or(|s| now.duration_since(s.changed) >= c.config.min_change_interval);
+        if !may_change || cover <= Kwh::ZERO {
+            return cover;
+        }
+        let need = (projected - limit) / left;
+        let amps = Ampere::new(((est - need) / c.config.voltage).value().floor());
+        let target = if amps >= c.config.min_current {
+            ChargerTarget::Limit(amps)
+        } else if pause_ok {
+            ChargerTarget::Pause
+        } else {
+            ChargerTarget::Limit(c.config.min_current)
+        };
+        // Always lower than `level`: a positive `cover` means the car draws more than the
+        // floor allows, so the floor is below `level`, and `amps` (rounded down from less than
+        // the car draws) is too.
+        let saving = saving_at(target.current());
+        self.bank_charger(input);
+        if target == ChargerTarget::Pause {
+            self.pauses = Some((hour, pauses + 1));
+        }
+        self.charger = Some(ChargerShed {
+            target,
+            since: limited.map_or(now, |s| s.since),
+            changed: now,
+            step: saving,
+            reason: format!("projected {projected:.2} > limit {limit:.2}"),
+        });
+        events.push(GuardEvent::ChargerLimit {
+            current: target.current(),
+            saving,
+            projected,
+            limit,
+        });
+        cover
+    }
+
+    /// Raises (or releases) the charger's limit if the projection with the extra draw stays
+    /// below `limit − release_margin`.
+    fn raise_charger(
+        &mut self,
+        cfg: &GuardConfig,
+        input: &GuardInput<'_>,
+        projected: Kwh,
+        limit: Kwh,
+        events: &mut Vec<GuardEvent>,
+    ) {
+        let now = input.now;
+        let (Some(s), Some((c, r))) = (self.charger.clone(), Self::ev(input)) else {
+            return;
+        };
+        let paused = s.target == ChargerTarget::Pause;
+        let wait = if paused {
+            c.config.min_pause.max(c.config.min_change_interval)
+        } else {
+            c.config.min_change_interval
+        };
+        // A raise is a release in steps: it waits like one, so the meter shows the last
+        // release before the next comes back.
+        let staggered = self
+            .last_release
+            .is_some_and(|t| now.duration_since(t) < cfg.restore_stagger);
+        if now.duration_since(s.changed) < wait || staggered {
+            return;
+        }
+        let left = input.meter.hour.end().duration_since(now);
+        let ceiling = c.ceiling();
+        let draw = |current: Ampere| demand(c, &r, &s).min(c.power_at(current));
+        let est = draw(s.target.current());
+        let from = if paused {
+            c.config.min_current.value() - 1.0
+        } else {
+            s.target.current().value()
+        };
+        let room = limit - cfg.release_margin - projected;
+        let Some(next) = (1..=c.config.max_raise_step)
+            .rev()
+            .map(|k| Ampere::new((from + f64::from(k)).min(ceiling.value())))
+            .find(|&l| (draw(l) - est) * left < room)
+        else {
+            return;
+        };
+        if next >= ceiling {
+            self.last_release = Some(now);
+            self.release_charger(input, ReleaseReason::BelowLimit, events);
+            return;
+        }
+        self.last_release = Some(now);
+        let step = est - draw(next);
+        self.bank_charger(input);
+        self.charger = Some(ChargerShed {
+            target: ChargerTarget::Limit(next),
+            since: s.since,
+            changed: now,
+            step,
+            reason: format!("projected {projected:.2} leaves room under {limit:.2}"),
+        });
+        events.push(GuardEvent::ChargerLimit {
+            current: next,
+            saving: step,
+            projected,
+            limit,
+        });
+    }
+
     fn settled_status(&self) -> GuardStatus {
-        if self.shed.is_empty() {
+        if self.shed.is_empty() && self.charger.is_none() {
             GuardStatus::Idle
         } else {
             GuardStatus::Shedding
         }
+    }
+}
+
+/// Whether the car's draw already follows the limit: a poll after the change shows it at
+/// or below what the limit allows.
+fn effective(c: &Charger, r: &ChargerReading, s: &ChargerShed) -> bool {
+    r.at > s.changed && r.power <= c.power_at(s.target.current()) + EFFECT_TOLERANCE
+}
+
+/// How much more the car draws than its limit allows (what the meter still shows of it).
+fn over_limit(c: &Charger, r: &ChargerReading, s: &ChargerShed) -> Kw {
+    (r.power - c.power_at(s.target.current())).max(Kw::ZERO)
+}
+
+/// What the car would draw without the limit. While it draws what the limit allows, the
+/// limit holds it back and its wish is unknown: assume as much as the ceiling allows.
+/// Otherwise its own draw shows it: more than the limit (the change hasn't shown yet, or
+/// observe mode), or less (it takes less than it is offered, e.g. nearly full).
+fn demand(c: &Charger, r: &ChargerReading, s: &ChargerShed) -> Kw {
+    let allowed = c.power_at(s.target.current());
+    if effective(c, r, s) && r.power + EFFECT_TOLERANCE >= allowed {
+        c.power_at(c.ceiling())
+    } else {
+        r.power
     }
 }
 
@@ -424,6 +730,7 @@ mod tests {
         zones: BTreeMap<ZoneId, Zone>,
         state: GuardState,
         limit: HourLimit,
+        charger: Option<Charger>,
     }
 
     impl Rig {
@@ -434,6 +741,7 @@ mod tests {
                 zones: zones(spec),
                 state: GuardState::default(),
                 limit: limit(4.7),
+                charger: None,
             }
         }
 
@@ -453,6 +761,7 @@ mod tests {
                 limit: &self.limit,
                 zones: &self.zones,
                 settings: &self.settings,
+                charger: self.charger.as_ref(),
                 enabled,
             };
             self.state.update(&self.cfg, &input)
@@ -752,6 +1061,157 @@ mod tests {
                 for s in &r.state.shed {
                     let z = &r.zones[&s.zone];
                     prop_assert!(z.shed_allowed() && z.active_override(now).is_none());
+                }
+            }
+        }
+    }
+
+    // ---- charger ----
+
+    use crate::charger::{ChargerConfig, ChargerWriteRecord};
+
+    /// A charger whose car draws `kw` at the latest poll (`at`).
+    fn charging(cfg: ChargerConfig, at: Timestamp, kw: f64) -> Charger {
+        let mut c = Charger::new(cfg);
+        c.on_reading(ChargerReading {
+            at,
+            mode: ChargerMode::Charging,
+            power: Kw::new(kw),
+            session: Kwh::ZERO,
+            dynamic_current: None,
+            max_current: Some(Ampere::new(16.0)),
+            offered: Ampere::new(16.0),
+            connected: true,
+        });
+        c
+    }
+
+    fn poll(r: &mut Rig, at: Timestamp, kw: f64) {
+        let c = r.charger.as_mut().unwrap();
+        let mut reading = c.reading.unwrap();
+        reading.at = at;
+        reading.power = Kw::new(kw);
+        c.on_reading(reading);
+    }
+
+    fn charger_events(events: &[GuardEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                GuardEvent::ChargerLimit { current, .. } => Some(format!("limit {current}")),
+                GuardEvent::ChargerRelease { reason } => Some(format!("release {reason:?}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_stale_meter_releases_the_floors_first_and_the_charger_last() {
+        let mut r = Rig::new(&[("bathroom", 1, 1.0)]);
+        r.charger = Some(charging(ChargerConfig::default(), at(29, 50), 3.68));
+        r.step(at(30, 0), 9.0);
+        assert_eq!(r.shed_ids(), ["bathroom"]);
+        assert_eq!(
+            r.state.charger.as_ref().unwrap().target,
+            ChargerTarget::Limit(Ampere::new(6.0))
+        );
+        let mut stale = meter(at(31, 0), 9.0);
+        stale.freshness = Freshness::Stale;
+        let ev = r.step_with(at(31, 0), &stale, true);
+        assert_eq!(released(&ev), [("bathroom", ReleaseReason::MeterStale)]);
+        poll(&mut r, at(32, 50), 3.68);
+        assert_eq!(
+            charger_events(&r.step_with(at(33, 0), &stale, true)),
+            ["release MeterStale"]
+        );
+        assert_eq!(r.state.status, GuardStatus::MeterStale);
+    }
+
+    #[test]
+    fn a_charger_without_readings_is_kept_only_while_our_limit_is_in_force() {
+        let shed = ChargerShed {
+            target: ChargerTarget::Limit(Ampere::new(8.0)),
+            since: at(0, 0),
+            changed: at(0, 0),
+            step: Kw::ZERO,
+            reason: String::new(),
+        };
+        let mut r = Rig::new(&[]);
+        let mut c = Charger::new(ChargerConfig::default());
+        c.last_write = Some(ChargerWriteRecord {
+            current: Ampere::new(8.0),
+            at: at(0, 0),
+            until: at(10, 0),
+        });
+        r.charger = Some(c);
+        r.state.charger = Some(shed.clone());
+        // Just restarted, no poll yet: kept, and nothing to decide about it.
+        assert_eq!(r.step(at(1, 0), 1.0), Vec::<GuardEvent>::new());
+        assert!(r.state.charger.is_some());
+        // Our limit expired without a poll: the charger is gone.
+        assert_eq!(
+            charger_events(&r.step(at(10, 0), 1.0)),
+            ["release ChargerUnavailable"]
+        );
+        // No charger configured any more.
+        r.charger = None;
+        r.state.charger = Some(shed);
+        assert_eq!(
+            charger_events(&r.step(at(11, 0), 1.0)),
+            ["release NotSheddable"]
+        );
+    }
+
+    #[test]
+    fn pauses_are_limited_per_hour() {
+        let cfg = ChargerConfig {
+            pause_allowed: true,
+            max_pauses_per_hour: 1,
+            min_pause: SignedDuration::from_mins(2),
+            ..ChargerConfig::default()
+        };
+        let mut r = Rig::new(&[]);
+        r.charger = Some(charging(cfg, at(4, 50), 3.68));
+        assert_eq!(charger_events(&r.step(at(5, 0), 8.0)), ["limit 0 A"]);
+        poll(&mut r, at(5, 30), 0.0);
+        // Room again: back to 6 A, then up in steps.
+        assert_eq!(charger_events(&r.step(at(7, 0), 1.0)), ["limit 9 A"]);
+        poll(&mut r, at(7, 30), 2.07);
+        // Over again: the hour's pause is used up, so 6 A is the floor.
+        assert_eq!(charger_events(&r.step(at(9, 0), 8.0)), ["limit 6 A"]);
+        assert_eq!(r.state.pauses, Some((HourStart::containing(at(0, 0)), 1)));
+    }
+
+    proptest! {
+        /// Whatever the house and the car do, the charger's target is a pause (only when
+        /// allowed) or a whole current within `[min_current, ceiling)`, and it changes at
+        /// most once per `min_change_interval`.
+        #[test]
+        fn charger_targets_stay_in_range(
+            pause_allowed in any::<bool>(),
+            steps in prop::collection::vec((0.0f64..12.0, 0.0f64..8.0), 1..60),
+        ) {
+            let cfg = ChargerConfig { pause_allowed, ..ChargerConfig::default() };
+            let mut r = Rig::new(&[("bathroom", 1, 1.0)]);
+            r.charger = Some(charging(cfg, at(0, 0), 3.0));
+            let mut last_change: Option<Timestamp> = None;
+            for (i, &(load, car)) in steps.iter().enumerate() {
+                let now = at(0, 0) + SignedDuration::from_secs(i64::try_from(i).unwrap() * 30);
+                poll(&mut r, now, car);
+                let ev = r.step(now, load);
+                if let Some(s) = &r.state.charger {
+                    let a = s.target.current().value();
+                    prop_assert!(a == a.floor());
+                    match s.target {
+                        ChargerTarget::Pause => prop_assert!(pause_allowed),
+                        ChargerTarget::Limit(c) => prop_assert!((6.0..16.0).contains(&c.value())),
+                    }
+                }
+                if ev.iter().any(|e| matches!(e, GuardEvent::ChargerLimit { .. })) {
+                    if let Some(t) = last_change {
+                        prop_assert!(now.duration_since(t) >= cfg.min_change_interval);
+                    }
+                    last_change = Some(now);
                 }
             }
         }

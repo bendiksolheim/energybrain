@@ -355,7 +355,12 @@ fn log(o: &Output) {
             let json = serde_json::to_string(e).expect("event serializes");
             info!(event = json, "event");
         }
-        Output::PublishStatus(_)
+        // Charger writes are logged and sent to Easee from E4 (PLAN.md §9).
+        Output::WriteCharger { .. }
+        | Output::WouldWriteCharger { .. }
+        | Output::PersistChargerWrite(_)
+        | Output::PersistChargerShedAllowed(_)
+        | Output::PublishStatus(_)
         | Output::PersistHour(_)
         | Output::PersistZoneWrite { .. }
         | Output::PersistZoneBase { .. }

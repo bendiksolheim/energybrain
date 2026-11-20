@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use energybrain_core::charger::ChargerWriteRecord;
 use energybrain_core::energy::{HourEnergy, Quality};
 use energybrain_core::engine::{PersistedState, PersistedZone};
 use energybrain_core::guard::GuardEvent;
@@ -18,7 +19,7 @@ use energybrain_core::ids::ZoneId;
 use energybrain_core::io::{Event, EventKind, Output, Sample, Status, ZoneSample};
 use energybrain_core::mode::Mode;
 use energybrain_core::time::HourStart;
-use energybrain_core::units::{Celsius, Kw, Kwh};
+use energybrain_core::units::{Ampere, Celsius, Kw, Kwh};
 use energybrain_core::zone::Override;
 use jiff::{SignedDuration, Timestamp};
 use rusqlite::types::FromSql;
@@ -373,6 +374,17 @@ impl Store for SqliteStore {
             let (zone, persisted) = row?.into_persisted()?;
             state.zones.insert(zone, persisted);
         }
+
+        let write: Option<String> = first_value(
+            &self.conn,
+            "SELECT value FROM settings WHERE key = 'charger_write'",
+        )?;
+        state.charger.last_write = write.as_deref().map(charger_write).transpose()?;
+        let allowed: Option<String> = first_value(
+            &self.conn,
+            "SELECT value FROM settings WHERE key = 'charger_shed_allowed'",
+        )?;
+        state.charger.shed_allowed = allowed.as_deref().map(flag).transpose()?;
         Ok(state)
     }
 
@@ -457,12 +469,21 @@ fn apply_one(tx: &Transaction<'_>, o: &Output) -> Result<(), StoreError> {
                 params![zone.as_str(), hour.start().as_second(), kwh.value()],
             )?;
         }
-        Output::PersistMode(mode) => {
-            tx.execute(
-                "INSERT INTO settings (key, value) VALUES ('mode', ?1)
-                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                [mode.as_str()],
-            )?;
+        Output::PersistMode(mode) => set_setting(tx, "mode", mode.as_str())?,
+        Output::PersistChargerWrite(Some(w)) => {
+            let value = format!(
+                "{} {} {}",
+                w.current.value(),
+                w.at.as_second(),
+                w.until.as_second()
+            );
+            set_setting(tx, "charger_write", &value)?;
+        }
+        Output::PersistChargerWrite(None) => {
+            tx.execute("DELETE FROM settings WHERE key = 'charger_write'", [])?;
+        }
+        Output::PersistChargerShedAllowed(allowed) => {
+            set_setting(tx, "charger_shed_allowed", if *allowed { "1" } else { "0" })?;
         }
         Output::PersistEvent(e) => {
             let (kind, zone) = event_index(e);
@@ -474,7 +495,11 @@ fn apply_one(tx: &Transaction<'_>, o: &Output) -> Result<(), StoreError> {
                 params![e.at.as_second(), kind, zone.map(ZoneId::as_str), json],
             )?;
         }
-        Output::WriteSetpoint { .. } | Output::WouldWrite { .. } | Output::PublishStatus(_) => {}
+        Output::WriteSetpoint { .. }
+        | Output::WouldWrite { .. }
+        | Output::WriteCharger { .. }
+        | Output::WouldWriteCharger { .. }
+        | Output::PublishStatus(_) => {}
     }
     Ok(())
 }
@@ -485,8 +510,11 @@ fn event_index(e: &Event) -> (&'static str, Option<&ZoneId>) {
         EventKind::Guard { event } => match event {
             GuardEvent::Shed { zone, .. } => ("shed", Some(zone)),
             GuardEvent::Release { zone, .. } => ("release", Some(zone)),
+            GuardEvent::ChargerLimit { .. } => ("charger_limit", None),
+            GuardEvent::ChargerRelease { .. } => ("charger_release", None),
             GuardEvent::LimitUnreachable { .. } => ("limit_unreachable", None),
         },
+        EventKind::ChargerOverride { .. } => ("charger_override", None),
         EventKind::Override { zone, .. } => ("override", Some(zone)),
         EventKind::OverrideExpired { zone } => ("override_expired", Some(zone)),
         EventKind::ModeChanged { .. } => ("mode_changed", None),
@@ -687,6 +715,42 @@ fn first_value<T: FromSql>(conn: &Connection, sql: &str) -> rusqlite::Result<Opt
     conn.query_row(sql, [], |r| r.get(0)).optional()
 }
 
+fn set_setting(tx: &Transaction<'_>, key: &str, value: &str) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )?;
+    Ok(())
+}
+
+/// Parses `"<amps> <at> <until>"` (seconds since the epoch).
+fn charger_write(s: &str) -> Result<ChargerWriteRecord, StoreError> {
+    let corrupt = || StoreError::Corrupt(format!("charger write {s:?}"));
+    let mut parts = s.split(' ');
+    let (Some(current), Some(at), Some(until), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(corrupt());
+    };
+    let current: f64 = current.parse().map_err(|_| corrupt())?;
+    let at: i64 = at.parse().map_err(|_| corrupt())?;
+    let until: i64 = until.parse().map_err(|_| corrupt())?;
+    Ok(ChargerWriteRecord {
+        current: Ampere::new(current),
+        at: timestamp(at)?,
+        until: timestamp(until)?,
+    })
+}
+
+fn flag(s: &str) -> Result<bool, StoreError> {
+    match s {
+        "1" => Ok(true),
+        "0" => Ok(false),
+        other => Err(StoreError::Corrupt(format!("flag {other:?}"))),
+    }
+}
+
 fn zone_id(s: &str) -> Result<ZoneId, StoreError> {
     ZoneId::new(s).map_err(|e| StoreError::Corrupt(e.to_string()))
 }
@@ -737,6 +801,7 @@ impl Store for MemoryStore {
 
 #[cfg(test)]
 mod tests {
+    use energybrain_core::charger::ChargerWrite;
     use energybrain_core::energy::Freshness;
     use energybrain_core::guard::ReleaseReason;
     use energybrain_core::io::ZoneStatus;
@@ -822,6 +887,12 @@ mod tests {
             },
             Output::PersistMode(Mode::Observe),
             Output::PersistMode(Mode::Active),
+            Output::PersistChargerWrite(Some(ChargerWriteRecord {
+                current: Ampere::new(7.0),
+                at: ts("2026-11-15T17:20:00Z"),
+                until: ts("2026-11-15T17:30:00Z"),
+            })),
+            Output::PersistChargerShedAllowed(false),
         ]
     }
 
@@ -878,6 +949,32 @@ mod tests {
                     to: Mode::Active,
                 },
             ),
+            event(
+                "2026-11-15T17:45:00Z",
+                EventKind::Guard {
+                    event: GuardEvent::ChargerLimit {
+                        current: Ampere::new(7.0),
+                        saving: Kw::new(1.8),
+                        projected: Kwh::new(5.5),
+                        limit: Kwh::new(4.7),
+                    },
+                },
+            ),
+            event(
+                "2026-11-15T17:46:00Z",
+                EventKind::Guard {
+                    event: GuardEvent::ChargerRelease {
+                        reason: ReleaseReason::BelowLimit,
+                    },
+                },
+            ),
+            event(
+                "2026-11-15T17:47:00Z",
+                EventKind::ChargerOverride {
+                    current: Ampere::new(8.0),
+                    until: ts("2026-11-15T19:47:00Z"),
+                },
+            ),
         ]
     }
 
@@ -896,8 +993,35 @@ mod tests {
                 value: Celsius::new(22.5),
                 reasons: vec![],
             },
+            Output::WriteCharger {
+                write: ChargerWrite {
+                    current: Ampere::new(7.0),
+                    ttl: SignedDuration::from_mins(10),
+                },
+                reason: String::new(),
+            },
+            Output::WouldWriteCharger {
+                write: ChargerWrite {
+                    current: Ampere::new(7.0),
+                    ttl: SignedDuration::from_mins(10),
+                },
+                reason: String::new(),
+            },
         ]);
         all
+    }
+
+    #[test]
+    fn a_released_charger_write_is_forgotten() {
+        let mut s = SqliteStore::open_in_memory().unwrap();
+        s.apply(&state_outputs()).unwrap();
+        assert!(s.load(ts(SINCE)).unwrap().charger.last_write.is_some());
+        s.apply(&[Output::PersistChargerWrite(None)]).unwrap();
+        let loaded = s.load(ts(SINCE)).unwrap();
+        assert_eq!(loaded.charger.last_write, None);
+        assert_eq!(loaded.charger.shed_allowed, Some(false));
+        s.apply(&[Output::PersistChargerShedAllowed(true)]).unwrap();
+        assert_eq!(s.load(ts(SINCE)).unwrap().charger.shed_allowed, Some(true));
     }
 
     /// What the engine itself would hold after the same outputs.
@@ -932,7 +1056,7 @@ mod tests {
         let mut m = MemoryStore::default();
         m.apply(&outputs()).unwrap();
         assert_eq!(m.load(ts(SINCE)).unwrap(), expected(ts(SINCE)));
-        assert_eq!(m.events.len(), 6);
+        assert_eq!(m.events.len(), 9);
     }
 
     #[test]
@@ -940,12 +1064,12 @@ mod tests {
         let mut s = SqliteStore::open_in_memory().unwrap();
         s.apply(&outputs()).unwrap();
         let all = s.events(None, 100).unwrap();
-        assert_eq!(all.len(), 6);
-        assert_eq!(all[0]["kind"]["type"], "mode_changed");
-        assert_eq!(all[5]["kind"]["event"]["type"], "shed");
+        assert_eq!(all.len(), 9);
+        assert_eq!(all[0]["kind"]["type"], "charger_override");
+        assert_eq!(all[8]["kind"]["event"]["type"], "shed");
         let recent = s.events(Some(ts("2026-11-15T17:42:00Z")), 2).unwrap();
         assert_eq!(recent.len(), 2);
-        assert_eq!(recent[1]["kind"]["type"], "override_expired");
+        assert_eq!(recent[1]["kind"]["event"]["type"], "charger_release");
         let kinds: Vec<String> = s
             .conn
             .prepare("SELECT kind || ':' || coalesce(zone, '-') FROM events ORDER BY id")
@@ -962,11 +1086,14 @@ mod tests {
                 "limit_unreachable:-",
                 "override:hallway",
                 "override_expired:hallway",
-                "mode_changed:-"
+                "mode_changed:-",
+                "charger_limit:-",
+                "charger_release:-",
+                "charger_override:-"
             ]
         );
         assert_eq!(s.prune_events(ts("2026-11-15T17:42:00Z")).unwrap(), 3);
-        assert_eq!(s.events(None, 100).unwrap().len(), 3);
+        assert_eq!(s.events(None, 100).unwrap().len(), 6);
     }
 
     #[test]
@@ -1216,6 +1343,31 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_charger_settings_are_reported() {
+        let corrupt = |sql: &str| {
+            let s = SqliteStore::open_in_memory().unwrap();
+            s.conn.execute_batch(sql).unwrap();
+            s.load(ts(SINCE)).unwrap_err().to_string()
+        };
+        for bad in ["", "7 1", "7 1 2 3", "x 1 2", "7 x 2", "7 1 x"] {
+            assert_eq!(
+                corrupt(&format!(
+                    "INSERT INTO settings VALUES ('charger_write', '{bad}')"
+                )),
+                format!("corrupt store: charger write {bad:?}")
+            );
+        }
+        assert!(
+            corrupt("INSERT INTO settings VALUES ('charger_write', '7 1 9223372036854775807')")
+                .starts_with("corrupt store: timestamp")
+        );
+        assert_eq!(
+            corrupt("INSERT INTO settings VALUES ('charger_shed_allowed', 'yes')"),
+            "corrupt store: flag \"yes\""
+        );
+    }
+
+    #[test]
     fn corrupt_rows_are_reported() {
         let corrupt = |sql: &str| {
             let s = SqliteStore::open_in_memory().unwrap();
@@ -1329,10 +1481,15 @@ mod tests {
         for o in outputs() {
             let ignored = matches!(
                 o,
-                Output::WriteSetpoint { .. } | Output::WouldWrite { .. } | Output::PublishStatus(_)
+                Output::WriteSetpoint { .. }
+                    | Output::WouldWrite { .. }
+                    | Output::WriteCharger { .. }
+                    | Output::WouldWriteCharger { .. }
+                    | Output::PublishStatus(_)
             );
             assert_eq!(s.apply(&[o]).is_err(), !ignored);
         }
+        assert!(s.apply(&[Output::PersistChargerWrite(None)]).is_err());
         assert!(s.load(ts(SINCE)).is_err());
         assert!(s.events(None, 1).is_err());
         assert!(s.zone_hours(Timestamp::MIN, Timestamp::MAX).is_err());

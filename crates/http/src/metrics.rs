@@ -26,7 +26,12 @@ impl Metrics {
             Output::WouldWrite { zone, .. } => {
                 *self.would_writes.entry(zone.clone()).or_default() += 1;
             }
-            Output::PublishStatus(_)
+            // Charger metrics arrive with E4 (PLAN.md §9).
+            Output::WriteCharger { .. }
+            | Output::WouldWriteCharger { .. }
+            | Output::PersistChargerWrite(_)
+            | Output::PersistChargerShedAllowed(_)
+            | Output::PublishStatus(_)
             | Output::PersistHour(_)
             | Output::PersistZoneWrite { .. }
             | Output::PersistZoneBase { .. }

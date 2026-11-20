@@ -1,6 +1,6 @@
 ---
 source: crates/core/src/io.rs
-assertion_line: 430
+assertion_line: 463
 expression: json(&status)
 ---
 {
@@ -127,6 +127,15 @@ expression: json(&status)
         "unit": "A"
       },
       "connected": true
-    }
+    },
+    "limit": {
+      "type": "limit",
+      "current": {
+        "value": 10.0,
+        "unit": "A"
+      }
+    },
+    "shed_allowed": true,
+    "override_until": null
   }
 }

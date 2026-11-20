@@ -1,0 +1,16 @@
+---
+source: crates/core/src/scenarios.rs
+assertion_line: 1028
+expression: observe.snapshot()
+---
+11-15 17:00:00Z car plugged in
+11-15 17:00:30Z [observe] limit charger to 14 A (saves 0.23 kW; projected 4.85 kWh, limit 4.70 kWh)
+11-15 17:00:30Z would write charger 14 A for 10 min
+11-15 17:01:10Z [observe] shed bathroom (1.50 kW; projected 6.91 kWh > 4.70 kWh)
+11-15 17:01:10Z would write bathroom 22.5 °C
+11-15 17:02:30Z [observe] limit charger to 6 A (saves 1.84 kW; projected 6.29 kWh, limit 4.70 kWh)
+11-15 17:02:30Z would write charger 6 A for 10 min
+11-15 17:56:20Z [observe] release bathroom (BelowLimit)
+11-15 17:56:20Z would write bathroom 26.5 °C
+11-15 17:59:20Z [observe] limit charger to 7 A (saves -0.23 kW; projected 4.40 kWh, limit 4.70 kWh)
+11-15 17:59:20Z would write charger 7 A for 10 min
