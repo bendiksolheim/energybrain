@@ -247,3 +247,9 @@ keep it up to date if a decision changes.
   written over. The guard's car model: `draw = min(demand, current × V)`, where `demand` is the
   reported draw unless the car draws exactly what the limit allows (then the ceiling). Raises
   wait for `restore_stagger` like zone releases.
+- E3: `reqwest` 0.13 (`default-features = false`, `rustls` + `json`) is the HTTPS client for
+  Easee — the first TLS in the project. `rustls` uses aws-lc-rs (built by `cc`, no cmake) and
+  the platform verifier (system CA store; distroless `cc` ships it). `.query()` needs an extra
+  feature, so the observations URL is formatted by hand. The `energybrain-easee` tests run a
+  fake Easee on `axum` (no mocking crate); its handlers count toward coverage, so every
+  scripted failure is exercised.

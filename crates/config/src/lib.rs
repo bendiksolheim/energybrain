@@ -10,13 +10,14 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use energybrain_core::actuator::ActuatorConfig;
+use energybrain_core::charger::ChargerConfig;
 use energybrain_core::energy::MeterConfig;
 use energybrain_core::engine::EngineConfig;
 use energybrain_core::guard::GuardConfig;
 use energybrain_core::ids::ZoneId;
 use energybrain_core::tariff::{CapacityTariff, Step, TariffError};
 use energybrain_core::time::LocalCalendar;
-use energybrain_core::units::{Celsius, CelsiusDelta, Kr, Kw, Kwh};
+use energybrain_core::units::{Ampere, Celsius, CelsiusDelta, Kr, Kw, Kwh, Volt};
 use energybrain_core::zone::{ZoneConfig, ZoneSettings};
 use jiff::SignedDuration;
 use jiff::tz::TimeZone;
@@ -26,6 +27,10 @@ use serde::Deserialize;
 pub const ENV_MQTT_USERNAME: &str = "ENERGYBRAIN_MQTT_USERNAME";
 /// Environment variable overriding `mqtt.password`.
 pub const ENV_MQTT_PASSWORD: &str = "ENERGYBRAIN_MQTT_PASSWORD";
+/// Environment variable overriding `ev.username` (the Easee account).
+pub const ENV_EASEE_USERNAME: &str = "ENERGYBRAIN_EASEE_USERNAME";
+/// Environment variable overriding `ev.password`.
+pub const ENV_EASEE_PASSWORD: &str = "ENERGYBRAIN_EASEE_PASSWORD";
 
 /// Why the configuration was rejected.
 #[derive(Debug, thiserror::Error)]
@@ -89,6 +94,34 @@ impl fmt::Debug for MqttConfig {
     }
 }
 
+/// How to reach the EV charger through Easee's cloud API (PLAN.md §9).
+#[derive(Clone, PartialEq, Eq)]
+pub struct EaseeConfig {
+    /// The charger's serial number (Easee's charger id).
+    pub serial: String,
+    /// Easee account user name (phone number or e-mail).
+    pub username: String,
+    /// Easee account password.
+    pub password: String,
+    /// API base URL, without a trailing slash.
+    pub api_url: String,
+    /// How often the charger is polled.
+    pub poll_interval: SignedDuration,
+}
+
+impl fmt::Debug for EaseeConfig {
+    /// Never prints the password.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EaseeConfig")
+            .field("serial", &self.serial)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("api_url", &self.api_url)
+            .field("poll_interval", &self.poll_interval)
+            .finish()
+    }
+}
+
 /// The topics of one zone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneTopics {
@@ -128,6 +161,9 @@ pub struct Config {
     pub sample_retention: SignedDuration,
     /// Everything the engine needs.
     pub engine: EngineConfig,
+    /// The EV charger's API settings, if there is a charger (`engine.charger` holds the
+    /// guard's side).
+    pub easee: Option<EaseeConfig>,
 }
 
 /// Reads and validates a configuration file.
@@ -167,6 +203,90 @@ struct Raw {
     thermostat: RawThermostat,
     #[serde(default, rename = "zone")]
     zone_list: Vec<RawZone>,
+    ev: Option<RawEv>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawEv {
+    serial: String,
+    username: Option<String>,
+    password: Option<String>,
+    #[serde(default = "default_api_url")]
+    api_url: String,
+    #[serde(default = "default_phases")]
+    phases: u8,
+    #[serde(default = "default_min_current")]
+    min_current: u8,
+    #[serde(default = "default_max_current")]
+    max_current: u8,
+    #[serde(default)]
+    pause_allowed: bool,
+    #[serde(default = "yes")]
+    shed_allowed: bool,
+    #[serde(default = "default_poll_interval")]
+    poll_interval_secs: u32,
+    #[serde(default = "default_ttl")]
+    ttl_minutes: u32,
+    #[serde(default = "default_min_change_interval")]
+    min_change_interval_secs: u32,
+    #[serde(default = "default_max_raise_step")]
+    max_raise_step: u8,
+    #[serde(default = "default_min_pause")]
+    min_pause_minutes: u32,
+    #[serde(default = "default_max_pauses")]
+    max_pauses_per_hour: u8,
+    #[serde(default = "default_ev_stale_after")]
+    stale_after_secs: u32,
+    #[serde(default = "default_override_minutes")]
+    override_minutes: u32,
+    #[serde(default = "default_ev_settle")]
+    settle_secs: u32,
+    #[serde(default = "default_charging_threshold")]
+    charging_threshold_kw: f64,
+}
+
+fn default_api_url() -> String {
+    "https://api.easee.com".to_owned()
+}
+fn default_phases() -> u8 {
+    1
+}
+fn default_min_current() -> u8 {
+    6
+}
+fn default_max_current() -> u8 {
+    32
+}
+fn default_poll_interval() -> u32 {
+    30
+}
+fn default_ttl() -> u32 {
+    10
+}
+fn default_min_change_interval() -> u32 {
+    120
+}
+fn default_max_raise_step() -> u8 {
+    4
+}
+fn default_min_pause() -> u32 {
+    15
+}
+fn default_max_pauses() -> u8 {
+    2
+}
+fn default_ev_stale_after() -> u32 {
+    180
+}
+fn default_override_minutes() -> u32 {
+    120
+}
+fn default_ev_settle() -> u32 {
+    120
+}
+fn default_charging_threshold() -> f64 {
+    0.5
 }
 
 fn default_timezone() -> String {
@@ -487,6 +607,7 @@ impl Raw {
             stale_after: secs(self.meter.stale_after_secs),
         };
         let meter_topic = topic("meter.topic", &self.meter.topic)?;
+        let (easee, charger) = self.ev.map(|ev| ev.validate(env)).transpose()?.unzip();
 
         let mut ids = BTreeSet::new();
         let mut zones = Vec::new();
@@ -523,9 +644,9 @@ impl Raw {
                 actuator,
                 zone_settings,
                 zones,
-                // The `[ev]` section arrives with the Easee adapter (PLAN.md §9, E3).
-                charger: None,
+                charger,
             },
+            easee,
         })
     }
 }
@@ -551,6 +672,84 @@ impl RawMqtt {
             password: env(ENV_MQTT_PASSWORD).or(self.password),
         };
         Ok((cfg, prefix))
+    }
+}
+
+impl RawEv {
+    fn validate(
+        self,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<(EaseeConfig, ChargerConfig), ConfigError> {
+        if self.serial.is_empty() {
+            return Err(invalid("ev.serial", "must not be empty"));
+        }
+        let credential = |var: &str, own: Option<String>, key: &str| {
+            env(var)
+                .or(own)
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| invalid(key, format!("required (or set {var})")))
+        };
+        let username = credential(ENV_EASEE_USERNAME, self.username, "ev.username")?;
+        let password = credential(ENV_EASEE_PASSWORD, self.password, "ev.password")?;
+        let api_url = self.api_url.trim_end_matches('/').to_owned();
+        if !(api_url.starts_with("https://") || api_url.starts_with("http://")) {
+            return Err(invalid("ev.api_url", "must be an http(s) URL"));
+        }
+        if !(1..=3).contains(&self.phases) {
+            return Err(invalid("ev.phases", "must be 1, 2 or 3"));
+        }
+        if self.min_current < 6 {
+            return Err(invalid("ev.min_current", "must be at least 6 (A)"));
+        }
+        if self.max_current <= self.min_current || self.max_current > 40 {
+            return Err(invalid(
+                "ev.max_current",
+                "must be above min_current and at most 40 (A)",
+            ));
+        }
+        // Easee allows 100 observation reads per 5 minutes.
+        if self.poll_interval_secs < 10 {
+            return Err(invalid("ev.poll_interval_secs", "must be at least 10"));
+        }
+        if self.stale_after_secs <= self.poll_interval_secs {
+            return Err(invalid(
+                "ev.stale_after_secs",
+                "must be longer than poll_interval_secs",
+            ));
+        }
+        if self.ttl_minutes < 2 {
+            return Err(invalid("ev.ttl_minutes", "must be at least 2"));
+        }
+        if self.max_raise_step == 0 {
+            return Err(invalid("ev.max_raise_step", "must be at least 1"));
+        }
+        let easee = EaseeConfig {
+            serial: self.serial,
+            username,
+            password,
+            api_url,
+            poll_interval: secs(self.poll_interval_secs),
+        };
+        let charger = ChargerConfig {
+            voltage: Volt::new(230.0 * f64::from(self.phases)),
+            stale_after: secs(self.stale_after_secs),
+            min_current: Ampere::new(f64::from(self.min_current)),
+            max_current: Ampere::new(f64::from(self.max_current)),
+            shed_allowed: self.shed_allowed,
+            pause_allowed: self.pause_allowed,
+            ttl: minutes(self.ttl_minutes),
+            min_change_interval: secs(self.min_change_interval_secs),
+            max_raise_step: self.max_raise_step,
+            min_pause: minutes(self.min_pause_minutes),
+            max_pauses_per_hour: self.max_pauses_per_hour,
+            override_duration: minutes(self.override_minutes),
+            settle: secs(self.settle_secs),
+            charging_threshold: Kw::new(non_negative(
+                "ev.charging_threshold_kw",
+                self.charging_threshold_kw,
+            )?),
+        };
+        Ok((easee, charger))
     }
 }
 
@@ -968,5 +1167,102 @@ mod tests {
             parse(text, &no_env).unwrap_err().to_string(),
             "tariff.tiers: must not be empty"
         );
+    }
+
+    /// The example with a minimal `[ev]` section plus `extra` keys.
+    fn with_ev(extra: &str) -> String {
+        format!(
+            "{EXAMPLE}\n[ev]\nserial = \"EH123456\"\nusername = \"u\"\npassword = \"p\"\n{extra}"
+        )
+    }
+
+    #[test]
+    fn the_charger_is_optional_and_documented_with_defaults() {
+        assert_eq!(ok(EXAMPLE).easee, None);
+        assert_eq!(ok(EXAMPLE).engine.charger, None);
+        // Uncommenting the example's section (with credentials from the environment) gives
+        // exactly the defaults.
+        let start = EXAMPLE.find("# [ev]").unwrap();
+        let uncommented: String = EXAMPLE[start..]
+            .lines()
+            .map(|l| {
+                let key = l.strip_prefix("# ").unwrap_or(l);
+                if key.starts_with('[') || key.contains(" = ") {
+                    key.to_owned()
+                } else {
+                    l.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let text = format!("{}{uncommented}", &EXAMPLE[..start]);
+        let env = |k: &str| match k {
+            ENV_EASEE_USERNAME => Some("me@example.com".to_owned()),
+            ENV_EASEE_PASSWORD => Some("s3cret".to_owned()),
+            _ => None,
+        };
+        let c = parse(&text, &env).unwrap();
+        let easee = c.easee.unwrap();
+        assert_eq!(easee.serial, "EH000000");
+        assert_eq!(easee.username, "me@example.com");
+        assert_eq!(easee.password, "s3cret");
+        assert_eq!(easee.api_url, "https://api.easee.com");
+        assert_eq!(easee.poll_interval, SignedDuration::from_secs(30));
+        assert_eq!(c.engine.charger, Some(ChargerConfig::default()));
+        assert!(!format!("{easee:?}").contains("s3cret"));
+    }
+
+    #[test]
+    fn charger_settings_are_converted() {
+        let c = ok(&with_ev(
+            "api_url = \"http://127.0.0.1:9000/\"\nphases = 3\npause_allowed = true\nshed_allowed = false\nttl_minutes = 4\nmax_raise_step = 2",
+        ));
+        assert_eq!(c.easee.unwrap().api_url, "http://127.0.0.1:9000");
+        let ch = c.engine.charger.unwrap();
+        assert_eq!(ch.voltage, Volt::new(690.0));
+        assert!(ch.pause_allowed);
+        assert!(!ch.shed_allowed);
+        assert_eq!(ch.ttl, SignedDuration::from_mins(4));
+        assert_eq!(ch.max_raise_step, 2);
+    }
+
+    #[test]
+    fn invalid_charger_settings_name_their_key() {
+        let cases = [
+            ("serial = \"\"", "ev.serial: must not be empty"),
+            (
+                "username = \"\"",
+                "ev.username: required (or set ENERGYBRAIN_EASEE_USERNAME)",
+            ),
+            (
+                "password = \"\"",
+                "ev.password: required (or set ENERGYBRAIN_EASEE_PASSWORD)",
+            ),
+            ("api_url = \"ftp://x\"", "ev.api_url: "),
+            ("phases = 0", "ev.phases: "),
+            ("phases = 4", "ev.phases: "),
+            ("min_current = 5", "ev.min_current: "),
+            ("max_current = 6", "ev.max_current: "),
+            ("max_current = 41", "ev.max_current: "),
+            ("poll_interval_secs = 9", "ev.poll_interval_secs: "),
+            ("stale_after_secs = 30", "ev.stale_after_secs: "),
+            ("ttl_minutes = 1", "ev.ttl_minutes: "),
+            ("max_raise_step = 0", "ev.max_raise_step: "),
+            ("charging_threshold_kw = -1", "ev.charging_threshold_kw: "),
+        ];
+        for (line, expected) in cases {
+            let key = line.split(" = ").next().unwrap();
+            let base = with_ev("");
+            let ev = base.find("\n[ev]\n").unwrap();
+            let text = if let Some(at) = base[ev..].find(&format!("\n{key} = ")) {
+                let start = ev + at + 1;
+                let end = start + base[start..].find('\n').unwrap();
+                format!("{}{line}{}", &base[..start], &base[end..])
+            } else {
+                format!("{base}{line}\n")
+            };
+            let err = parse(&text, &no_env).unwrap_err().to_string();
+            assert!(err.starts_with(expected), "{line}: got {err:?}");
+        }
     }
 }

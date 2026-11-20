@@ -12,6 +12,7 @@ classes: {
 app: "energybrain\naxum · jiff · serde_json · thiserror · tokio · tracing · tracing-subscriber" {class: io}
 config: "energybrain-config\njiff · serde · thiserror · toml" {class: io}
 core: "energybrain-core\njiff · serde · thiserror" {class: pure}
+easee: "energybrain-easee\njiff · reqwest · serde · serde_json · thiserror · tokio · tracing" {class: io}
 han: "energybrain-han\njiff · thiserror" {class: pure}
 http: "energybrain-http\naxum · jiff · serde · serde_json · thiserror · tokio" {class: io}
 mqtt: "energybrain-mqtt\njiff · rumqttc · serde_json · thiserror · tokio" {class: io}
@@ -24,6 +25,8 @@ app -> http
 app -> mqtt
 app -> store
 config -> core
+easee -> config
+easee -> core
 han -> core
 http -> core
 mqtt -> config

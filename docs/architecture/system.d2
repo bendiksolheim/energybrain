@@ -17,7 +17,10 @@ house: House (LAN) {
   pulse: "Tibber Pulse\non Kaifa HAN meter" {class: external}
   ztrm: "Heatit Z-TRM3 ×6\nvia Z-Wave JS UI" {class: external}
   homekit: "HomeKit\nHomebridge Easy MQTT" {class: external}
+  easee_charger: "Easee Charge Lite\n(WiFi, cloud only)" {class: external}
 }
+
+easee_cloud: "Easee cloud API\napi.easee.com" {class: external}
 
 broker: "mosquitto" {class: external; shape: queue}
 
@@ -31,6 +34,7 @@ eb: energybrain process {
     transport <-> translate
   }
   han: "energybrain-han\nHDLC + DLMS parser" {class: pure}
+  easee: "energybrain-easee\nreqwest: poll observations,\nset dynamic current" {class: io}
 
   loop: "energybrain (app)\nrun loop: select! over\nMQTT · tick · shutdown\nSystemClock → now" {class: io}
   core: "energybrain-core\nEngine::handle(Input) → Outputs\npure: no I/O, no clock\n(see engine view)" {class: pure}
@@ -42,6 +46,8 @@ eb: energybrain process {
   mqtt.translate -> loop: Input
   loop -> mqtt.translate: "WriteSetpoint\nPublishStatus"
   loop <-> core: "Input → Outputs"
+  easee -> loop: "Input::Charger\n(wired in E4)" {style.stroke-dash: 3}
+  loop -> easee: "WriteCharger\n(wired in E4)" {style.stroke-dash: 3}
   config -> loop: startup {style.stroke-dash: 3}
   loop -> store: "Persist* (channel)"
   store -> loop: "PersistedState\nat startup" {style.stroke-dash: 3}
@@ -59,3 +65,5 @@ broker <-> eb.mqtt.transport
 eb.store -> db
 eb.http -> db: "history queries" {style.stroke-dash: 3}
 browser -> eb.http: HTTP
+eb.easee <-> easee_cloud: "HTTPS: login,\nobservations, commands"
+easee_cloud <-> house.easee_charger

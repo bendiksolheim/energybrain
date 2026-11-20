@@ -189,3 +189,48 @@ id = "basement"
 name = "Basement"
 device = "zwave/Basement/Floor_basement"
 priority = 6
+
+# The EV charger (Easee Charge Lite), controlled through Easee's cloud API (PLAN.md §9).
+# Uncomment to enable it. Leave the section out and energybrain ignores the charger: it still
+# shows up in the meter reading, but only floors are shed. The guard lowers the charger's
+# current before it sheds any floor; the "Charger limit" set in the Easee app stays the
+# ceiling, and a "Temporary charging limit" set in the app keeps energybrain away from the
+# charger for `override_minutes` (or until the car is unplugged).
+# [ev]
+# The charger's serial number, as listed by GET /api/chargers (see docs/easee.md).
+# serial = "EH000000"
+# Easee account. Prefer the environment variables ENERGYBRAIN_EASEE_USERNAME and
+# ENERGYBRAIN_EASEE_PASSWORD, which win over these keys, so the file holds no secrets.
+# username = "<easee user>"
+# password = "<easee password>"
+# api_url = "https://api.easee.com"
+# Phases the car charges on: power per amp is 230 V × phases (the I-Pace uses 1 on this IT net).
+# phases = 1
+# The lowest current a car charges at, and the charger's maximum (writing it removes our limit).
+# min_current = 6
+# max_current = 32
+# Whether the guard may pause charging (0 A). Off until the car has been seen to resume
+# reliably after a pause (docs/easee.md); until then 6 A is the floor.
+# pause_allowed = false
+# Whether the guard may limit the charger at all (HomeKit can switch it at runtime).
+# shed_allowed = true
+# How often the charger is polled. Easee allows 100 reads per 5 minutes; at least 10.
+# poll_interval_secs = 30
+# Every limit clears by itself after this unless energybrain refreshes it (it does so at half
+# the time), so a crashed or disconnected energybrain hands the charger back to the app.
+# ttl_minutes = 10
+# At most one change of the current per this many seconds (some cars dislike more).
+# min_change_interval_secs = 120
+# The largest raise in one step, in amps.
+# max_raise_step = 4
+# A pause lasts at least this long, and at most this many pauses happen per hour.
+# min_pause_minutes = 15
+# max_pauses_per_hour = 2
+# With no reading for this long the charger is left alone and only floors are shed.
+# stale_after_secs = 180
+# How long the app's temporary limit keeps energybrain away from the charger.
+# override_minutes = 120
+# After the car follows a change, how long the meter's average needs to show it.
+# settle_secs = 120
+# Power above this counts as charging.
+# charging_threshold_kw = 0.5

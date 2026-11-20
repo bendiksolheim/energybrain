@@ -109,3 +109,16 @@ limit 32 1
   returning 401, run the login again.
 - Status `0` (Sent) from the command is normal: it means "sent to the charger". `2` is
   Executed, `3` Rejected.
+
+## Enabling the charger in energybrain
+
+Once the checks above look right, uncomment the `[ev]` section in your config (see
+`config/example.toml`) and set the serial. Give the account through the environment rather
+than the file:
+
+```sh
+ENERGYBRAIN_EASEE_USERNAME=…  ENERGYBRAIN_EASEE_PASSWORD=…
+```
+
+Start in observe mode and watch the `charger_limit` / `charger_release` events in
+`/api/events` while the car charges, before switching to active (PLAN.md §9, go-live).

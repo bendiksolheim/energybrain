@@ -365,6 +365,7 @@ sane, topics non-empty. Errors are typed and point at the offending key.
 | Serde | `serde`, `serde_json`, `toml` |
 | SQLite | `rusqlite` (`bundled`) |
 | HTTP | `axum`, `tower` (dev, `util`) |
+| HTTPS client (Easee) | `reqwest` (`rustls`, `json`; §9) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` |
 | Logging | `tracing`, `tracing-subscriber` |
 | Errors | `thiserror` (libraries); `anyhow` only in `main.rs` if at all |
@@ -994,8 +995,16 @@ offer 20 s later, polled every 30 s):
 7. temporary limit set in the app while limited → override, charger left alone, floors shed;
 8. restart mid-limit keeps it; leaving Active releases it.
 
-**E3 — `energybrain-easee` + config.** Auth/refresh/re-login, polling, commands, backoff,
-tested against an `axum` fake; `[ev]` config with validation; `config/example.toml`.
+**E3 — `energybrain-easee` + config. ✅** `api` (pure: observation parsing, lenient about
+numbers sent as strings; command body in whole amps and whole minutes rounded up; command
+outcome; token lifetime; backoff), `client` (login, refresh at 80 % of `expiresIn`,
+re-login when a refresh is refused, one refresh-and-retry on 401, 429 → `RateLimited` with
+`Retry-After`), `link` (polls at once and every `poll_interval`, backs off 30 s → 10 min on
+failure, sends writes as they come, stops when the write channel closes). Tested against a
+fake Easee on `axum`. `[ev]` config section (commented out in `config/example.toml`),
+credentials also from `ENERGYBRAIN_EASEE_USERNAME`/`ENERGYBRAIN_EASEE_PASSWORD`;
+`Config::easee` holds the API side, `engine.charger` the guard side. Required
+observations: op mode and power; a missing cloud flag counts as connected.
 
 **E4 — App wiring and surfaces.** The poll and command tasks in `run()`, HomeKit topics,
 `/api/state`, `/metrics` (`energybrain_ev_power_kw`, `energybrain_ev_offered_amps`,
