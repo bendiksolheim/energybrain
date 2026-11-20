@@ -828,10 +828,10 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
   `minutes = ttl` (default 10) and refreshed after `ttl / 2` while it still applies. If
   energybrain dies or loses internet, the limit expires and the charger goes back to the
   app's own setting. A dead-man switch costs one write per 5 min, and refreshing the same
-  value doesn't change the pilot signal. The app has two controls (user, 2026-11-19):
-  "Charger limit" (in the menu, presumably max current, observation 47) and "Temporary
-  charging limit" (on the main screen, presumably the dynamic current, 48). "Charger limit"
-  is the user's ceiling (lowest wins).
+  value doesn't change the pilot signal. The app has two controls, confirmed by the user
+  on 2026-11-20: "Charger limit" (in the menu) is the max current (observation 47), and
+  "Temporary charging limit" (on the main screen) is the dynamic current (48).
+  "Charger limit" is the user's ceiling (lowest wins).
 - **Release = write `max_current` (32 A) with a short TTL (1 min).** We can't delete a
   limit, but 32 A is above anything the app allows, so "lowest wins" leaves the app's
   value in charge. A release is a write, so it obeys the same rules as zones: never in
@@ -872,8 +872,12 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
   `override_minutes` (default 120), or until the cable is unplugged, and the guard uses
   floors only. This mirrors a thermostat override. Without it, the user setting 6 A would
   be overwritten by our 10 A, or their 15 A by our 6 A. A reboot or unplug clears 48 by
-  itself, and that is not an override. How a cleared value reads (absent, 0 or max) is
-  checked in E0.
+  itself, and that is not an override. How a cleared 48 reads wasn't checked (user skipped
+  it), so the rule only counts a value as the user's when it is **below 47**, isn't
+  something we wrote, and isn't 0. "No limit", whether it reads as absent, 32 or equal to
+  47, is never mistaken for a user limit. A user pause (0 A) is the one case that isn't
+  recognised. The adapter logs the raw value of 48 at debug level, so observe mode shows
+  how a cleared limit really reads.
 - **Observe mode** credits the charger saving it *would* have made, exactly as for zones
   (the whole saving since the decision, banked on release). Otherwise observe mode would
   go on to shed every floor while the car charges. Events `WouldLimitCharger { amps,
@@ -951,12 +955,12 @@ Each ends with `just check` green and a commit.
 **E0 — Discovery (user, before Active).**
 1. Find the serial, and check that the observations endpoint works with your account (a
    `curl` recipe in `docs/easee.md`).
-2. Confirm the app mapping. Change "Charger limit" and check that observation 47
-   follows; change "Temporary charging limit" and check that 48 follows. Note whether
-   the temporary limit has a duration in the app, and how 48 reads with no limit set (after
-   an unplug).
-3. With the I-Pace plugged in, set 0 A and back to 10 A a few times, once after the car
-   has slept for an hour. If it resumes every time, set `pause_allowed = true`.
+2. ✅ App mapping confirmed (2026-11-20): "Charger limit" = 47, "Temporary charging
+   limit" = 48. The duration in the app and how a cleared 48 reads were skipped (see the
+   override rule).
+3. Optional, only needed to enable pausing: with the I-Pace plugged in, set 0 A and back
+   to 10 A a few times, once after the car has slept for an hour. If it resumes every time,
+   set `pause_allowed = true`. Until then pausing stays off and 6 A is the floor.
 
 **E1 — Core types.** `ChargerMode`, `ChargerReading`, `ChargerLimit`, `Ampere × Volt`,
 inputs/outputs, learned voltage, status/event serialization (snapshots).
