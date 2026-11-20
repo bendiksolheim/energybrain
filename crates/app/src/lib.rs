@@ -1,8 +1,9 @@
 //! The energybrain service: the runtime loop wiring the engine to MQTT, SQLite and HTTP.
 //!
 //! [`run`] owns the [`Engine`]. It multiplexes MQTT events (from a forwarding task, so
-//! `select!` stays cancellation-safe), a tick interval and the shutdown signal, and fans
-//! the engine's outputs out to MQTT, the store thread, the HTTP state and the logs.
+//! `select!` stays cancellation-safe), EV charger readings (from the Easee link's task), a
+//! tick interval and the shutdown signal, and fans the engine's outputs out to MQTT, the
+//! Easee link, the store thread, the HTTP state and the logs.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use energybrain_config::Config;
+use energybrain_core::charger::ChargerWrite;
 use energybrain_core::clock::Clock;
 use energybrain_core::engine::Engine;
 use energybrain_core::io::{Input, Output, Status};
@@ -114,13 +116,28 @@ pub struct Runtime {
     pub tick: Duration,
     /// Pause between MQTT reconnect attempts.
     pub retry_delay: Duration,
+    /// The EV charger's Easee link, if `[ev]` is configured (built by the caller, since
+    /// creating its HTTP client can fail).
+    pub charger: Option<energybrain_easee::Link>,
 }
 
 /// Hours older than this are not loaded; the ledger only needs the current month.
 const HISTORY: SignedDuration = SignedDuration::from_hours(32 * 24);
 
 /// Runs the service until `shutdown` completes.
-pub async fn run(rt: Runtime, shutdown: impl Future<Output = ()>) -> Result<(), StoreError> {
+pub async fn run(
+    rt: Runtime,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), StoreError> {
+    // One non-generic body: a generic one is instantiated once per caller's future type, and
+    // llvm-cov's summary counts each instance's lines separately (CLAUDE.md, coverage gotcha).
+    serve(rt, Box::pin(shutdown)).await
+}
+
+async fn serve(
+    rt: Runtime,
+    mut shutdown: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>,
+) -> Result<(), StoreError> {
     let Runtime {
         config,
         clock,
@@ -130,6 +147,7 @@ pub async fn run(rt: Runtime, shutdown: impl Future<Output = ()>) -> Result<(), 
         listener,
         tick,
         retry_delay,
+        charger,
     } = rt;
     let now = clock.now();
     let persisted = store.load(now - HISTORY)?;
@@ -164,10 +182,22 @@ pub async fn run(rt: Runtime, shutdown: impl Future<Output = ()>) -> Result<(), 
             .await;
     });
 
+    // Readings come in through `charger_inputs`; the sender is kept alive here, so without a
+    // charger the branch below just never fires.
+    let (charger_in_tx, mut charger_inputs) = mpsc::channel(16);
+    let (charger_tx, charger_task) = charger
+        .map(|link| {
+            let (tx, rx) = mpsc::channel(16);
+            let task = tokio::spawn(link.run(clock.clone(), charger_in_tx.clone(), rx));
+            (tx, task)
+        })
+        .unzip();
+
     let (store_tx, store_thread) = spawn_store(store);
     let mut sink = Sink {
         translator,
         publisher,
+        charger: charger_tx,
         store_tx,
         status_tx,
         metrics,
@@ -175,7 +205,6 @@ pub async fn run(rt: Runtime, shutdown: impl Future<Output = ()>) -> Result<(), 
 
     let mut ticker = tokio::time::interval(tick);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    tokio::pin!(shutdown);
     loop {
         tokio::select! {
             () = &mut shutdown => break,
@@ -186,12 +215,22 @@ pub async fn run(rt: Runtime, shutdown: impl Future<Output = ()>) -> Result<(), 
             Some(event) = mqtt_events.recv() => {
                 on_mqtt(event, &mut engine, &mut sink, &mqtt_tx, clock.as_ref()).await;
             }
+            Some(input) = charger_inputs.recv() => {
+                let out = engine.handle(input);
+                sink.emit(out).await;
+            }
         }
     }
 
     info!("shutting down");
     let out = engine.shutdown(clock.now());
     sink.emit(out).await;
+    // Closing the write channel lets the link send what is queued (the release) and stop.
+    sink.charger = None;
+    if let Some(task) = charger_task {
+        let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+    }
+    drop(charger_inputs);
     finish(sink, mqtt_events, link_task, store_thread, http_stop, http).await;
     info!("stopped");
     Ok(())
@@ -297,6 +336,7 @@ fn spawn_store(
 struct Sink {
     translator: Translator,
     publisher: Publisher,
+    charger: Option<mpsc::Sender<ChargerWrite>>,
     store_tx: std::sync::mpsc::Sender<Vec<Output>>,
     status_tx: watch::Sender<Option<Arc<Status>>>,
     metrics: Arc<Mutex<Metrics>>,
@@ -313,6 +353,10 @@ impl Sink {
             if let Output::PublishStatus(s) = o {
                 self.status_tx
                     .send_replace(Some(Arc::new(s.as_ref().clone())));
+            }
+            if let (Output::WriteCharger { write, .. }, Some(tx)) = (o, &self.charger) {
+                // Full only while Easee hangs; the engine retries an unconfirmed write.
+                let _ = tx.try_send(*write);
             }
             for p in self.translator.encode(o) {
                 // Fails only once the link task is gone, i.e. during shutdown.
@@ -349,16 +393,19 @@ fn log(o: &Output) {
             let reasons: Vec<String> = reasons.iter().map(ToString::to_string).collect();
             info!(%zone, %value, reasons = reasons.join("; "), "would write setpoint (observe)");
         }
+        Output::WriteCharger { write, reason } => {
+            info!(current = %write.current, ttl = ?write.ttl, %reason, "write charger limit");
+        }
+        Output::WouldWriteCharger { write, reason } => {
+            info!(current = %write.current, ttl = ?write.ttl, %reason, "would write charger limit (observe)");
+        }
         Output::PersistEvent(e) => {
             // Serializing plain data structs to a String cannot fail.
             #[allow(clippy::expect_used)]
             let json = serde_json::to_string(e).expect("event serializes");
             info!(event = json, "event");
         }
-        // Charger writes are logged and sent to Easee from E4 (PLAN.md §9).
-        Output::WriteCharger { .. }
-        | Output::WouldWriteCharger { .. }
-        | Output::PersistChargerWrite(_)
+        Output::PersistChargerWrite(_)
         | Output::PersistChargerShedAllowed(_)
         | Output::PublishStatus(_)
         | Output::PersistHour(_)

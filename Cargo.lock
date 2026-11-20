@@ -590,6 +590,7 @@ dependencies = [
  "axum 0.8.9",
  "energybrain-config",
  "energybrain-core",
+ "energybrain-easee",
  "energybrain-http",
  "energybrain-mqtt",
  "energybrain-store",

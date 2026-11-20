@@ -144,6 +144,8 @@ pub struct TopicConfig {
     pub prefix: String,
     /// Per-zone thermostat topics.
     pub zones: Vec<ZoneTopics>,
+    /// Whether there is an EV charger (then `<prefix>/ev/…` topics exist).
+    pub ev: bool,
 }
 
 /// The validated configuration.
@@ -571,16 +573,7 @@ impl Raw {
         let safety_margin =
             non_negative("tariff.safety_margin_kwh", self.tariff.safety_margin_kwh)?;
 
-        let g = &self.guard;
-        let guard = GuardConfig {
-            release_margin: Kwh::new(non_negative(
-                "guard.release_margin_kwh",
-                g.release_margin_kwh,
-            )?),
-            min_shed_duration: minutes(g.min_shed_minutes),
-            restore_stagger: minutes(g.restore_stagger_minutes),
-            settle: secs(g.settle_secs),
-        };
+        let guard = self.guard.validate()?;
         let actuator = ActuatorConfig {
             deadband: CelsiusDelta::new(non_negative("actuator.deadband", self.actuator.deadband)?),
             min_interval: secs(self.actuator.min_interval_secs),
@@ -629,6 +622,7 @@ impl Raw {
                 meter: meter_topic,
                 prefix: mqtt.1,
                 zones: zone_topics,
+                ev: easee.is_some(),
             },
             mqtt: mqtt.0,
             http_listen,
@@ -647,6 +641,20 @@ impl Raw {
                 charger,
             },
             easee,
+        })
+    }
+}
+
+impl RawGuard {
+    fn validate(&self) -> Result<GuardConfig, ConfigError> {
+        Ok(GuardConfig {
+            release_margin: Kwh::new(non_negative(
+                "guard.release_margin_kwh",
+                self.release_margin_kwh,
+            )?),
+            min_shed_duration: minutes(self.min_shed_minutes),
+            restore_stagger: minutes(self.restore_stagger_minutes),
+            settle: secs(self.settle_secs),
         })
     }
 }
@@ -684,7 +692,9 @@ impl RawEv {
             return Err(invalid("ev.serial", "must not be empty"));
         }
         let credential = |var: &str, own: Option<String>, key: &str| {
+            // An empty variable (compose's `${VAR:-}` when unset) counts as unset.
             env(var)
+                .filter(|v| !v.is_empty())
                 .or(own)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| invalid(key, format!("required (or set {var})")))
@@ -1202,6 +1212,12 @@ mod tests {
             _ => None,
         };
         let c = parse(&text, &env).unwrap();
+        // Empty variables don't hide the file's values.
+        let empty = |_: &str| Some(String::new());
+        assert_eq!(
+            parse(&with_ev(""), &empty).unwrap().easee.unwrap().username,
+            "u"
+        );
         let easee = c.easee.unwrap();
         assert_eq!(easee.serial, "EH000000");
         assert_eq!(easee.username, "me@example.com");

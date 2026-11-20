@@ -101,6 +101,7 @@ async fn runtime(cfg: Config, store: Box<dyn Store>, events: EventQuery) -> (Run
         listener,
         tick: Duration::from_millis(50),
         retry_delay: Duration::from_millis(50),
+        charger: None,
     };
     (rt, port)
 }
@@ -452,4 +453,135 @@ fn architecture_diagram_names_every_crate() {
         Vec::<String>::new(),
         "add these crates to system.d2"
     );
+}
+
+/// A minimal Easee cloud: a car charging at 15 A, recording every command it gets.
+async fn fake_easee() -> (String, Arc<Mutex<Vec<serde_json::Value>>>) {
+    use axum::Json;
+    use axum::routing::{get, post};
+    use serde_json::{Value, json};
+
+    let commands = Arc::new(Mutex::new(Vec::new()));
+    let recorded = commands.clone();
+    let app = axum::Router::new()
+        .route(
+            "/api/accounts/login",
+            post(|| async {
+                Json(json!({"accessToken": "a", "expiresIn": 3600, "refreshToken": "r"}))
+            }),
+        )
+        .route(
+            "/state/{serial}/observations",
+            get(|| async {
+                Json(json!({"observations": [
+                    {"id": 109, "value": 3},
+                    {"id": 120, "value": 3.45},
+                    {"id": 47, "value": 16},
+                    {"id": 114, "value": 15},
+                ]}))
+            }),
+        )
+        .route(
+            "/api/chargers/{serial}/commands/set_dynamic_charger_current",
+            post(move |Json(body): Json<Value>| async move {
+                recorded.lock().unwrap().push(body);
+                Json(json!({"status": 0}))
+            }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, commands)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_charger_is_limited_through_easee_and_released_from_homekit() {
+    let mqtt_port = broker();
+    let (easee_url, commands) = fake_easee().await;
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("eb.db");
+    let mut cfg = config(mqtt_port, &db);
+    // The same configuration with an [ev] section pointing at the fake.
+    let ev = energybrain_config::parse(
+        &format!(
+            "{}\n[ev]\nserial = \"EH123456\"\nusername = \"u\"\npassword = \"p\"\napi_url = \"{easee_url}\"\n",
+            std::fs::read_to_string(env!("CARGO_MANIFEST_DIR").to_owned() + "/../../config/example.toml").unwrap()
+        ),
+        &|_| None,
+    )
+    .unwrap();
+    cfg.engine.charger = ev.engine.charger;
+    cfg.topics.ev = true;
+    let link = energybrain_easee::Link::with_timing(
+        ev.easee.unwrap(),
+        energybrain_easee::Timing {
+            poll_interval: Duration::from_millis(100),
+            backoff_min: Duration::from_millis(100),
+            backoff_max: Duration::from_millis(100),
+        },
+    )
+    .unwrap();
+    let store = Box::new(SqliteStore::open(&db).unwrap());
+    let (mut rt, http_port) = runtime(cfg, store, sqlite_events(db.clone())).await;
+    rt.charger = Some(link);
+    let (stop, stopped) = oneshot::channel::<()>();
+    let service = tokio::spawn(run(rt, async {
+        let _ = stopped.await;
+    }));
+
+    let mut world = World::connect(mqtt_port).await;
+    world.expect("energybrain/mode", "observe").await;
+    world.expect("energybrain/ev/shed_allowed", "1").await;
+    // 6.4 kW from the meter with the car at 15 A: observe mode limits the charger on paper.
+    world.send("tibber", fixture("kaifa_ma304h3e_list1")).await;
+    world.expect("energybrain/ev/limited", "1").await;
+    assert!(
+        commands.lock().unwrap().is_empty(),
+        "observe writes nothing"
+    );
+    // Active: the limit goes to Easee for real.
+    world.send("energybrain/mode/set", "active").await;
+    world.expect("energybrain/mode", "active").await;
+    timeout(Duration::from_secs(10), async {
+        while commands.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        commands.lock().unwrap()[0],
+        serde_json::json!({"amps": 6, "minutes": 10})
+    );
+    let metrics = http_get(http_port, "/metrics").await;
+    assert!(
+        metrics.contains("energybrain_ev_writes_total 1"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("energybrain_ev_would_write_total 1"),
+        "{metrics}"
+    );
+
+    // Switching limiting off in HomeKit releases it; stopping then writes nothing more.
+    world.send("energybrain/ev/shed_allowed/set", "0").await;
+    world.expect("energybrain/ev/shed_allowed", "0").await;
+    stop.send(()).unwrap();
+    timeout(Duration::from_secs(15), service)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let sent = commands.lock().unwrap().clone();
+    assert_eq!(
+        sent.last(),
+        Some(&serde_json::json!({"amps": 32, "minutes": 1})),
+        "{sent:?}"
+    );
+    let state = SqliteStore::open(&db)
+        .unwrap()
+        .load(ts("2026-11-01T00:00:00Z"))
+        .unwrap();
+    assert_eq!(state.charger.shed_allowed, Some(false));
+    assert_eq!(state.charger.last_write, None);
 }

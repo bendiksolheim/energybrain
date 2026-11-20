@@ -10,6 +10,7 @@ publish.workspace = true
 axum = "0.8.9"
 energybrain-config = { version = "0.1.0", path = "../config" }
 energybrain-core = { version = "0.1.0", path = "../core" }
+energybrain-easee = { version = "0.1.0", path = "../easee" }
 energybrain-http = { version = "0.1.0", path = "../http" }
 energybrain-mqtt = { version = "0.1.0", path = "../mqtt" }
 energybrain-store = { version = "0.1.0", path = "../store" }

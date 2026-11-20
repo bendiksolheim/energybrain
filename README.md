@@ -74,9 +74,19 @@ docker compose logs -f
 | `[[zone]] shed_delta` | 4.0 | How far a floor is lowered (°C), never below `min_setpoint` |
 | `[[zone]] shed_allowed` | true | Default; HomeKit can switch it per zone at runtime |
 | `[[zone]] nominal_kw` | 1.0 | Load guess until the floor's heating power has been learned |
+| `[ev]` | (absent) | The EV charger (Easee); see below |
+| `ENERGYBRAIN_EASEE_USERNAME` / `_PASSWORD` | – | Easee account (env vars override the file) |
+| `ev.pause_allowed` | false | Whether the guard may pause charging; otherwise 6 A is its floor |
 
 Each zone's heater power is learned from its thermostat's power reports and remembered. Its
 kWh counter is logged per hour.
+
+**EV charger.** With an `[ev]` section, energybrain polls the Easee charger through Easee's
+cloud API every 30 s and lowers its current *before* it lowers any floor (down to 6 A, or a
+pause if allowed). Every limit expires by itself after 10 minutes unless renewed, so a stopped
+energybrain hands the charger back to the app. The app's "Charger limit" stays the ceiling, and
+a "Temporary charging limit" set in the app keeps energybrain away from the charger for two
+hours or until the car is unplugged. See [docs/easee.md](docs/easee.md) and PLAN.md §9.
 
 ## MQTT topics
 
@@ -91,6 +101,8 @@ kWh counter is logged per hour.
 | `energybrain/peakguard/active` | out | `1` while the guard is shedding |
 | `energybrain/zone/<id>/shed` | out | `1` while that floor is lowered |
 | `energybrain/zone/<id>/shed_allowed` · `/set` | out · in | `1`/`0`, persisted |
+| `energybrain/ev/limited` | out | `1` while the charger's current is limited (with `[ev]`) |
+| `energybrain/ev/shed_allowed` · `/set` | out · in | `1`/`0`, persisted (with `[ev]`) |
 | `energybrain/status` | out | Full status as JSON (same as `/api/state`) |
 
 `/set` topics accept `1`/`0`, `true`/`false` or `on`/`off`. Status topics are retained and are
@@ -126,7 +138,8 @@ docs don't include a complete `config.json` example.
 
 - **The contact sensor** reads "closed" normally and "open" while floors are lowered, so you
   can attach a HomeKit notification to it.
-- **Per-zone switches.** Add one `shed_allowed` switch per zone.
+- **Per-zone switches.** Add one `shed_allowed` switch per zone, and one for
+  `energybrain/ev/shed_allowed` if you have a charger configured.
 - **Broker settings.** Each accessory's `mqtt` block needs your broker settings, as for your
   other Easy MQTT accessories.
 

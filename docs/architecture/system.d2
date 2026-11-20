@@ -36,7 +36,7 @@ eb: energybrain process {
   han: "energybrain-han\nHDLC + DLMS parser" {class: pure}
   easee: "energybrain-easee\nreqwest: poll observations,\nset dynamic current" {class: io}
 
-  loop: "energybrain (app)\nrun loop: select! over\nMQTT · tick · shutdown\nSystemClock → now" {class: io}
+  loop: "energybrain (app)\nrun loop: select! over\nMQTT · charger · tick · shutdown\nSystemClock → now" {class: io}
   core: "energybrain-core\nEngine::handle(Input) → Outputs\npure: no I/O, no clock\n(see engine view)" {class: pure}
   config: "energybrain-config\nTOML → Config" {class: io}
   store: "energybrain-store\nSQLite, own thread" {class: io}
@@ -46,8 +46,8 @@ eb: energybrain process {
   mqtt.translate -> loop: Input
   loop -> mqtt.translate: "WriteSetpoint\nPublishStatus"
   loop <-> core: "Input → Outputs"
-  easee -> loop: "Input::Charger\n(wired in E4)" {style.stroke-dash: 3}
-  loop -> easee: "WriteCharger\n(wired in E4)" {style.stroke-dash: 3}
+  easee -> loop: "Input::Charger\n(channel)"
+  loop -> easee: "WriteCharger\n(channel)"
   config -> loop: startup {style.stroke-dash: 3}
   loop -> store: "Persist* (channel)"
   store -> loop: "PersistedState\nat startup" {style.stroke-dash: 3}
@@ -59,7 +59,7 @@ browser: "Browser" {class: external}
 
 house.pulse -> broker: "tibber\nHDLC frames"
 house.ztrm <-> broker: "setpoint · power · kWh\n…/set writes"
-house.homekit <-> broker: "energybrain/…\nset · retained status"
+house.homekit <-> broker: "energybrain/…\nset · retained status\n(zone/… · ev/…)"
 sim <-> broker: "same device topics\n+ sim/…" {style.stroke-dash: 4}
 broker <-> eb.mqtt.transport
 eb.store -> db

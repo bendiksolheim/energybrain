@@ -72,8 +72,8 @@ keep it up to date if a decision changes.
   is unreachable (EV charging) to judge whether the target is realistic.
 - Runtime host: Docker on amd64. No metrics stack: Grafana/VictoriaMetrics dropped from
   compose; observe mode is reviewed via `/api/events`.
-- Other big loads: Easee Charge Lite EV charger (WiFi/cloud API, not controlled in phase 1),
-  heat pump (not controllable). Both show up only in the whole-house meter reading.
+- Other big loads: Easee Charge Lite EV charger (WiFi/cloud API; controlled since E4 when
+  `[ev]` is configured, PLAN.md §9), heat pump (not controllable, only in the meter reading).
 - EV: Jaguar I-Pace on the Easee, charging **1-phase** (10 A ≈ 2.2–2.3 kW; 6 A min ≈ 1.4 kW,
   32 A max ≈ 7.4 kW). Usually run at 10–15 A from the Easee app. No departure target needed
   yet: the charger may be shed freely. Easee/Tibber smart charging is off (no competing
@@ -253,3 +253,8 @@ keep it up to date if a decision changes.
   feature, so the observations URL is formatted by hand. The `energybrain-easee` tests run a
   fake Easee on `axum` (no mocking crate); its handlers count toward coverage, so every
   scripted failure is exercised.
+- E4: `run(rt, shutdown)` boxes the shutdown future and calls a non-generic `serve`: a generic
+  body is instantiated once per caller's future type, and llvm-cov's summary then counts each
+  instance's lines separately, so a branch taken by only one test's instance shows as missed.
+  The Easee `Link` is built in `main.rs` (creating the reqwest client is fallible, and main is
+  outside the coverage gate) and passed in `Runtime::charger`.

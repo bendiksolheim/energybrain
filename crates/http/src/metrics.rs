@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use energybrain_core::charger::ChargerStatus;
 use energybrain_core::ids::ZoneId;
 use energybrain_core::io::{Output, Status};
 use energybrain_core::mode::Mode;
@@ -14,6 +15,8 @@ use energybrain_core::mode::Mode;
 pub struct Metrics {
     writes: BTreeMap<ZoneId, u64>,
     would_writes: BTreeMap<ZoneId, u64>,
+    charger_writes: u64,
+    charger_would_writes: u64,
 }
 
 impl Metrics {
@@ -26,10 +29,9 @@ impl Metrics {
             Output::WouldWrite { zone, .. } => {
                 *self.would_writes.entry(zone.clone()).or_default() += 1;
             }
-            // Charger metrics arrive with E4 (PLAN.md §9).
-            Output::WriteCharger { .. }
-            | Output::WouldWriteCharger { .. }
-            | Output::PersistChargerWrite(_)
+            Output::WriteCharger { .. } => self.charger_writes += 1,
+            Output::WouldWriteCharger { .. } => self.charger_would_writes += 1,
+            Output::PersistChargerWrite(_)
             | Output::PersistChargerShedAllowed(_)
             | Output::PublishStatus(_)
             | Output::PersistHour(_)
@@ -108,6 +110,9 @@ impl Metrics {
                     f64::from(u8::from(z.shed)),
                 );
             }
+            if let Some(c) = &s.charger {
+                self.charger(&mut out, c);
+            }
         }
         for (name, counts) in [
             ("energybrain_zone_writes_total", &self.writes),
@@ -119,6 +124,38 @@ impl Metrics {
             }
         }
         out.0
+    }
+}
+
+impl Metrics {
+    /// The EV charger's metrics (PLAN.md §9). The limit is only present while limited
+    /// (0 = paused).
+    fn charger(&self, out: &mut Text, c: &ChargerStatus) {
+        out.gauge(
+            "energybrain_ev_available",
+            &[],
+            f64::from(u8::from(c.available)),
+        );
+        if let Some(r) = &c.reading {
+            out.gauge("energybrain_ev_power_kw", &[], r.power.value());
+            out.gauge("energybrain_ev_offered_amps", &[], r.offered.value());
+        }
+        if let Some(l) = c.limit {
+            out.gauge("energybrain_ev_limit_amps", &[], l.current().value());
+        }
+        #[allow(clippy::cast_precision_loss)] // counts stay far below 2^53
+        {
+            out.counter(
+                "energybrain_ev_writes_total",
+                &[],
+                self.charger_writes as f64,
+            );
+            out.counter(
+                "energybrain_ev_would_write_total",
+                &[],
+                self.charger_would_writes as f64,
+            );
+        }
     }
 }
 
@@ -152,13 +189,16 @@ impl Text {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use energybrain_core::charger::{ChargerMode, ChargerReading, ChargerTarget, ChargerWrite};
     use energybrain_core::energy::{Freshness, HourEnergy, Quality};
     use energybrain_core::guard::GuardStatus;
     use energybrain_core::io::{Event, EventKind, ZoneStatus};
     use energybrain_core::peaks::{DayPeak, HourLimit, LimitBasis};
     use energybrain_core::tariff::{Tier, TierIndex};
     use energybrain_core::time::HourStart;
+    use energybrain_core::units::Ampere;
     use energybrain_core::units::{Celsius, Kr, Kw, Kwh};
+    use jiff::SignedDuration;
     use jiff::Timestamp;
 
     use super::*;
@@ -240,7 +280,49 @@ pub(crate) mod tests {
         m.record(&write);
         m.record(&would);
         m.record(&would);
-        insta::assert_snapshot!(m.render(Some(&status()), true));
+        let charger_write = ChargerWrite {
+            current: Ampere::new(8.0),
+            ttl: SignedDuration::from_mins(10),
+        };
+        m.record(&Output::WriteCharger {
+            write: charger_write,
+            reason: String::new(),
+        });
+        m.record(&Output::WouldWriteCharger {
+            write: charger_write,
+            reason: String::new(),
+        });
+        let mut s = status();
+        s.charger = Some(ChargerStatus {
+            freshness: Freshness::Fresh,
+            available: true,
+            reading: Some(ChargerReading {
+                at: ts("2026-11-15T17:19:40Z"),
+                mode: ChargerMode::Charging,
+                power: Kw::new(1.84),
+                session: Kwh::new(3.0),
+                dynamic_current: Some(Ampere::new(8.0)),
+                max_current: Some(Ampere::new(16.0)),
+                offered: Ampere::new(8.0),
+                connected: true,
+            }),
+            limit: Some(ChargerTarget::Limit(Ampere::new(8.0))),
+            shed_allowed: true,
+            override_until: None,
+        });
+        insta::assert_snapshot!(m.render(Some(&s), true));
+        // Without a reading or a limit, only availability and the counters.
+        s.charger = Some(ChargerStatus {
+            freshness: Freshness::NoData,
+            available: false,
+            reading: None,
+            limit: None,
+            shed_allowed: true,
+            override_until: None,
+        });
+        let text = m.render(Some(&s), true);
+        assert!(text.contains("energybrain_ev_available 0"));
+        assert!(!text.contains("energybrain_ev_power_kw") && !text.contains("ev_limit_amps"));
     }
 
     #[test]
@@ -296,6 +378,8 @@ pub(crate) mod tests {
                 heating_kw: Kw::ZERO,
             },
             Output::PersistMode(Mode::Off),
+            Output::PersistChargerWrite(None),
+            Output::PersistChargerShedAllowed(true),
             Output::PersistShedAllowed {
                 zone: bathroom(),
                 allowed: true,

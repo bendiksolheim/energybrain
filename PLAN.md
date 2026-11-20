@@ -1006,11 +1006,17 @@ credentials also from `ENERGYBRAIN_EASEE_USERNAME`/`ENERGYBRAIN_EASEE_PASSWORD`;
 `Config::easee` holds the API side, `engine.charger` the guard side. Required
 observations: op mode and power; a missing cloud flag counts as connected.
 
-**E4 — App wiring and surfaces.** The poll and command tasks in `run()`, HomeKit topics,
-`/api/state`, `/metrics` (`energybrain_ev_power_kw`, `energybrain_ev_offered_amps`,
-`energybrain_ev_limit_amps`, `energybrain_ev_writes_total`). `/healthz` stays 200 when only
-the charger is stale: the floors still guard, and status shows it. Update the architecture
-diagrams.
+**E4 — App wiring and surfaces. ✅** `Runtime::charger` holds the Easee `Link` (built in
+`main.rs`, the only fallible part); `run()` spawns it, feeds its readings to the engine in the
+`select!` loop and routes `WriteCharger` to it (`try_send`; the actuator retries unconfirmed
+writes). On shutdown the release is flushed (write channel closed, link awaited up to 10 s).
+HomeKit: `<prefix>/ev/shed_allowed` (+ `/set`) and `<prefix>/ev/limited`, only with `[ev]`.
+`/metrics`: `energybrain_ev_available`, `energybrain_ev_power_kw`,
+`energybrain_ev_offered_amps`, `energybrain_ev_limit_amps` (while limited; 0 = paused),
+`energybrain_ev_writes_total`, `energybrain_ev_would_write_total`. `/api/state` carries the
+charger section. `/healthz` stays 200 when only the charger is stale. Compose passes the
+optional `ENERGYBRAIN_EASEE_*` variables (an empty variable counts as unset). `run()` is now a
+thin wrapper boxing the shutdown future, so its body has one instantiation (coverage).
 
 **E5 — Simulator.** The sim serves a fake Easee API (axum) backed by its EV model. The EV
 then draws `min(offered, car_max) × 230 V`, ramping over ~20 s, with the TTL obeyed. This

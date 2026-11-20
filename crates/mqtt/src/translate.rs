@@ -3,7 +3,8 @@
 //! Inbound: HAN frames on the meter topic, plain-number thermostat values (Z-Wave JS UI
 //! "value only"), and our own Easy MQTT control topics (`<prefix>/…/set`).
 //! Outbound: setpoint writes to `<setpoint topic>/set`, and retained status topics for
-//! HomeKit. Retained topics are only re-published when their payload changes, and all of
+//! HomeKit. With an EV charger, `<prefix>/ev/shed_allowed` (+ `/set`) and `<prefix>/ev/limited`
+//! work like a zone's `shed_allowed` and `shed`. Retained topics are only re-published when their payload changes, and all of
 //! them again after a reconnect.
 
 use std::collections::{BTreeMap, HashMap};
@@ -61,6 +62,7 @@ pub struct Translator {
     zone_topics: HashMap<String, (ZoneId, ZoneValue)>,
     setpoint_topics: HashMap<ZoneId, String>,
     zones: Vec<ZoneId>,
+    ev: bool,
     retained: BTreeMap<String, String>,
 }
 
@@ -82,6 +84,7 @@ impl Translator {
             zone_topics,
             setpoint_topics,
             zones: topics.zones.iter().map(|z| z.zone.clone()).collect(),
+            ev: topics.ev,
             retained: BTreeMap::new(),
         }
     }
@@ -96,6 +99,9 @@ impl Translator {
         subs.push(format!("{p}/mode/set"));
         subs.push(format!("{p}/active/set"));
         subs.push(format!("{p}/zone/+/shed_allowed/set"));
+        if self.ev {
+            subs.push(format!("{p}/ev/shed_allowed/set"));
+        }
         subs
     }
 
@@ -156,6 +162,9 @@ impl Translator {
                 }),
                 None => Err(format!("unknown zone {id:?}")),
             },
+            ["ev", "shed_allowed"] if self.ev => {
+                switch(text).map(|allowed| Input::SetChargerShedAllowed { allowed })
+            }
             _ => return Decoded::Ignored,
         };
         control.map_or_else(invalid, |input| Decoded::Inputs(vec![input]))
@@ -244,6 +253,10 @@ impl Translator {
                 flag(z.shed_allowed),
             ));
         }
+        if let Some(c) = &s.charger {
+            topics.push((format!("{p}/ev/limited"), flag(c.limit.is_some())));
+            topics.push((format!("{p}/ev/shed_allowed"), flag(c.shed_allowed)));
+        }
         // Serializing plain data structs to a String cannot fail.
         #[allow(clippy::expect_used)]
         let json = serde_json::to_string(s).expect("status serializes");
@@ -302,6 +315,7 @@ pub(crate) mod tests {
                 zone("bathroom", "Bathroom/Floor_bathroom"),
                 zone("hallway", "Hallway/Floor_hallway"),
             ],
+            ev: false,
         }
     }
 
@@ -727,5 +741,61 @@ pub(crate) mod tests {
         for o in &outputs {
             assert!(t.encode(o).is_empty(), "{o:?}");
         }
+    }
+
+    #[test]
+    fn ev_topics_exist_only_with_a_charger() {
+        use energybrain_core::charger::{ChargerStatus, ChargerTarget};
+        use energybrain_core::units::Ampere;
+        let now = ts(NOW);
+        let set = b"0".as_slice();
+        // Without a charger: no subscription, and the control is not ours.
+        let plain = translator();
+        assert!(!plain.subscriptions().iter().any(|s| s.contains("/ev/")));
+        assert_eq!(
+            plain.decode("energybrain/ev/shed_allowed/set", set, now),
+            Decoded::Ignored
+        );
+        // With one: a switch like a zone's, and two retained state topics.
+        let mut t = Translator::new(
+            &TopicConfig {
+                ev: true,
+                ..topics()
+            },
+            TimeZone::get("Europe/Oslo").unwrap(),
+        );
+        assert!(
+            t.subscriptions()
+                .contains(&"energybrain/ev/shed_allowed/set".to_owned())
+        );
+        assert_eq!(
+            t.decode("energybrain/ev/shed_allowed/set", set, now),
+            Decoded::Inputs(vec![Input::SetChargerShedAllowed { allowed: false }])
+        );
+        assert!(matches!(
+            t.decode("energybrain/ev/shed_allowed/set", b"maybe", now),
+            Decoded::Invalid { .. }
+        ));
+        let mut st = status(Mode::Active, GuardStatus::Shedding, false);
+        st.charger = Some(ChargerStatus {
+            freshness: Freshness::Fresh,
+            available: true,
+            reading: None,
+            limit: Some(ChargerTarget::Limit(Ampere::new(8.0))),
+            shed_allowed: true,
+            override_until: None,
+        });
+        let published = t.encode(&Output::PublishStatus(Box::new(st)));
+        let ev: Vec<_> = topics_of(&published)
+            .into_iter()
+            .filter(|(topic, _)| topic.contains("/ev/"))
+            .collect();
+        assert_eq!(
+            ev,
+            [
+                ("energybrain/ev/limited", "1"),
+                ("energybrain/ev/shed_allowed", "1")
+            ]
+        );
     }
 }

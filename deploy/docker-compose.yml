@@ -16,6 +16,9 @@ services:
     environment:
       ENERGYBRAIN_MQTT_USERNAME: ${ENERGYBRAIN_MQTT_USERNAME:?set in deploy/.env}
       ENERGYBRAIN_MQTT_PASSWORD: ${ENERGYBRAIN_MQTT_PASSWORD:?set in deploy/.env}
+      # Easee account, only needed with an [ev] section (PLAN.md §9).
+      ENERGYBRAIN_EASEE_USERNAME: ${ENERGYBRAIN_EASEE_USERNAME:-}
+      ENERGYBRAIN_EASEE_PASSWORD: ${ENERGYBRAIN_EASEE_PASSWORD:-}
       RUST_LOG: info
     volumes:
       - ./energybrain.toml:/config/energybrain.toml:ro

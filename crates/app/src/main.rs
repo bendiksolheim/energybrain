@@ -35,6 +35,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let charger = config
+        .easee
+        .clone()
+        .map(energybrain_easee::Link::new)
+        .transpose()?;
     let runtime = Runtime {
         config,
         clock: Arc::new(SystemClock),
@@ -44,6 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         tick: Duration::from_secs(10),
         retry_delay: Duration::from_secs(5),
+        charger,
     };
     run(runtime, shutdown).await?;
     Ok(())

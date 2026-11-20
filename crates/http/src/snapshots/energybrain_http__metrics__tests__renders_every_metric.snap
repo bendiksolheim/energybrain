@@ -1,7 +1,7 @@
 ---
 source: crates/http/src/metrics.rs
-assertion_line: 237
-expression: "m.render(Some(&status()), true)"
+assertion_line: 313
+expression: "m.render(Some(&s), true)"
 ---
 # TYPE energybrain_mqtt_connected gauge
 energybrain_mqtt_connected 1
@@ -32,6 +32,18 @@ energybrain_zone_setpoint_celsius{zone="bathroom",kind="decision"} 22.5
 energybrain_zone_setpoint_celsius{zone="bathroom",kind="reported"} 26.5
 # TYPE energybrain_zone_shed gauge
 energybrain_zone_shed{zone="bathroom"} 1
+# TYPE energybrain_ev_available gauge
+energybrain_ev_available 1
+# TYPE energybrain_ev_power_kw gauge
+energybrain_ev_power_kw 1.84
+# TYPE energybrain_ev_offered_amps gauge
+energybrain_ev_offered_amps 8
+# TYPE energybrain_ev_limit_amps gauge
+energybrain_ev_limit_amps 8
+# TYPE energybrain_ev_writes_total counter
+energybrain_ev_writes_total 1
+# TYPE energybrain_ev_would_write_total counter
+energybrain_ev_would_write_total 1
 # TYPE energybrain_zone_writes_total counter
 energybrain_zone_writes_total{zone="bathroom"} 1
 # TYPE energybrain_zone_would_write_total counter

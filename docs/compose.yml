@@ -14,6 +14,9 @@ services:
     environment:
       ENERGYBRAIN_MQTT_USERNAME: ${ENERGYBRAIN_MQTT_USERNAME:?set in .env}
       ENERGYBRAIN_MQTT_PASSWORD: ${ENERGYBRAIN_MQTT_PASSWORD:?set in .env}
+      # Easee account, only needed with an [ev] section (PLAN.md §9).
+      ENERGYBRAIN_EASEE_USERNAME: ${ENERGYBRAIN_EASEE_USERNAME:-}
+      ENERGYBRAIN_EASEE_PASSWORD: ${ENERGYBRAIN_EASEE_PASSWORD:-}
       RUST_LOG: info
       # The image logs JSON; use "text" for human-readable lines.
       # ENERGYBRAIN_LOG_FORMAT: text

@@ -83,6 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         history,
         listener,
         retry_delay: Duration::from_secs(5),
+        // The simulated charger's fake Easee arrives in E5 (PLAN.md §9).
+        charger: None,
     };
     run(runtime, async move {
         let _ = eb_stopped.changed().await;
