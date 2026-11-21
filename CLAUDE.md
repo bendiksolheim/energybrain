@@ -263,3 +263,7 @@ keep it up to date if a decision changes.
   requests reach the house through the driver's `select!` (request + oneshot reply), so
   `House` stays pure. `config/dev.toml` now has an `[ev]` section (dummy credentials), so the
   dev-config test compares topics field by field instead of `dev.topics == real.topics`.
+- E6: store migration 3 adds the charger's sample columns to `samples` (no separate table: one
+  charger, one row per minute). `ev_overridden IS NULL` means "no charger configured", so old
+  samples and charger-less setups read back as `charger: None`. The stacked floors + EV
+  series is computed in `energybrain-http::history`, like `floors`.

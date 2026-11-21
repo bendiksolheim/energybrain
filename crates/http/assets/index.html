@@ -38,8 +38,19 @@
   </section>
   <section class="card">
     <h2>Power</h2>
-    <p class="sub">Moving average of the whole house, and the floors' reported power together.</p>
+    <p class="sub">Moving average of the whole house, and the floors' reported power together.
+      With an EV charger, its power is stacked on top of the floors (shaded).</p>
     <div id="c-power" class="chart"></div>
+  </section>
+  <section class="card" id="ev-card" hidden>
+    <h2>EV charger</h2>
+    <p class="sub">The current the charger offers the car, the charger limit set in the Easee
+      app, and the guard's limit (in observe mode: the limit it would have set; 0 A is a
+      pause). Shaded where a temporary limit from the app overrode the guard.</p>
+    <div id="c-ev" class="chart"></div>
+    <div class="bands">
+      <span><i class="sw override"></i>Temporary limit from the app</span>
+    </div>
   </section>
   <section class="card">
     <h2>Hour budget</h2>

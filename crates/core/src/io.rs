@@ -2,7 +2,9 @@
 
 use jiff::Timestamp;
 
-use crate::charger::{ChargerReading, ChargerStatus, ChargerWrite, ChargerWriteRecord};
+use crate::charger::{
+    ChargerReading, ChargerStatus, ChargerTarget, ChargerWrite, ChargerWriteRecord,
+};
 use crate::energy::{Freshness, HourEnergy};
 use crate::guard::{GuardEvent, GuardStatus};
 use crate::ids::ZoneId;
@@ -317,6 +319,40 @@ pub struct Sample {
     pub limit: Kwh,
     /// Per-zone part, in status order.
     pub zones: Vec<ZoneSample>,
+    /// The EV charger's part, if one is configured.
+    pub charger: Option<ChargerSample>,
+}
+
+/// The EV charger's part of a [`Sample`]. Reading values are `None` unless the reading is
+/// fresh, so the graphs show a gap rather than an old value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChargerSample {
+    /// The charger's power.
+    pub power: Option<Kw>,
+    /// The current the charger offers the car.
+    pub offered: Option<Ampere>,
+    /// The user's charger limit (observation 47).
+    pub max: Option<Ampere>,
+    /// The guard's limit (what it would write in observe mode); 0 A is a pause.
+    pub limit: Option<Ampere>,
+    /// Whether the user's temporary limit overrides the guard.
+    pub overridden: bool,
+}
+
+impl ChargerSample {
+    /// The parts of `status` worth graphing.
+    pub fn of(status: &ChargerStatus) -> Self {
+        let fresh = status
+            .reading
+            .filter(|_| status.freshness == Freshness::Fresh);
+        Self {
+            power: fresh.map(|r| r.power),
+            offered: fresh.map(|r| r.offered),
+            max: fresh.and_then(|r| r.max_current),
+            limit: status.limit.map(ChargerTarget::current),
+            overridden: status.override_until.is_some(),
+        }
+    }
 }
 
 /// One zone's part of a [`Sample`].
@@ -363,6 +399,7 @@ impl Sample {
                     overridden: z.override_until.is_some(),
                 })
                 .collect(),
+            charger: status.charger.as_ref().map(ChargerSample::of),
         }
     }
 }
@@ -372,7 +409,7 @@ mod tests {
     use jiff::civil::date;
 
     use super::*;
-    use crate::charger::{ChargerMode, ChargerTarget};
+    use crate::charger::ChargerMode;
     use crate::energy::Quality;
     use crate::guard::ReleaseReason;
     use crate::peaks::LimitBasis;
@@ -490,6 +527,31 @@ mod tests {
                     shed: true,
                     overridden: true,
                 }],
+                charger: Some(ChargerSample {
+                    power: Some(Kw::new(2.3)),
+                    offered: Some(Ampere::new(10.0)),
+                    max: Some(Ampere::new(15.0)),
+                    limit: Some(Ampere::new(10.0)),
+                    overridden: false,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_charger_sample_leaves_out_stale_readings() {
+        let mut charger = status().charger.unwrap();
+        charger.freshness = Freshness::Stale;
+        charger.limit = Some(ChargerTarget::Pause);
+        charger.override_until = Some(ts("2026-11-15T19:00:00Z"));
+        assert_eq!(
+            ChargerSample::of(&charger),
+            ChargerSample {
+                power: None,
+                offered: None,
+                max: None,
+                limit: Some(Ampere::ZERO),
+                overridden: true,
             }
         );
     }

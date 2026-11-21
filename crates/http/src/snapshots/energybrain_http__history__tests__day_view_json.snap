@@ -1,6 +1,6 @@
 ---
 source: crates/http/src/history.rs
-assertion_line: 733
+assertion_line: 779
 expression: json(&view)
 ---
 {
@@ -417,7 +417,8 @@ expression: json(&view)
           null
         ]
       }
-    ]
+    ],
+    "ev": null
   },
   "event_hours": [
     {

@@ -16,7 +16,7 @@ use energybrain_core::engine::{PersistedState, PersistedZone};
 use energybrain_core::guard::GuardEvent;
 use energybrain_core::guard::GuardStatus;
 use energybrain_core::ids::ZoneId;
-use energybrain_core::io::{Event, EventKind, Output, Sample, Status, ZoneSample};
+use energybrain_core::io::{ChargerSample, Event, EventKind, Output, Sample, Status, ZoneSample};
 use energybrain_core::mode::Mode;
 use energybrain_core::time::HourStart;
 use energybrain_core::units::{Ampere, Celsius, Kw, Kwh};
@@ -113,6 +113,15 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (at, zone)
     ) WITHOUT ROWID;
 ",
+    // The EV charger's part of a sample (PLAN.md §9, E6). `ev_overridden` is NULL when no
+    // charger was configured; the other columns are NULL when unknown.
+    "
+    ALTER TABLE samples ADD COLUMN ev_power_kw REAL;
+    ALTER TABLE samples ADD COLUMN ev_offered_a REAL;
+    ALTER TABLE samples ADD COLUMN ev_max_a REAL;
+    ALTER TABLE samples ADD COLUMN ev_limit_a REAL;
+    ALTER TABLE samples ADD COLUMN ev_overridden INTEGER;
+",
 ];
 
 /// How long samples are kept unless configured otherwise.
@@ -161,10 +170,12 @@ impl Sampler {
 
 fn insert_sample(tx: &Transaction<'_>, s: &Sample) -> Result<(), StoreError> {
     let at = s.at.as_second();
+    let ev = s.charger.as_ref();
     tx.execute(
         "INSERT OR REPLACE INTO samples
-         (at, mode, guard, power_kw, used_kwh, projected_kwh, allowed_kwh, limit_kwh)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         (at, mode, guard, power_kw, used_kwh, projected_kwh, allowed_kwh, limit_kwh,
+          ev_power_kw, ev_offered_a, ev_max_a, ev_limit_a, ev_overridden)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             at,
             s.mode.as_str(),
@@ -173,7 +184,12 @@ fn insert_sample(tx: &Transaction<'_>, s: &Sample) -> Result<(), StoreError> {
             s.used.value(),
             s.projected.map(Kwh::value),
             s.allowed.value(),
-            s.limit.value()
+            s.limit.value(),
+            ev.and_then(|c| c.power).map(Kw::value),
+            ev.and_then(|c| c.offered).map(Ampere::value),
+            ev.and_then(|c| c.max).map(Ampere::value),
+            ev.and_then(|c| c.limit).map(Ampere::value),
+            ev.map(|c| c.overridden)
         ],
     )?;
     for (idx, z) in (0_i64..).zip(&s.zones) {
@@ -301,7 +317,8 @@ impl SqliteStore {
     pub fn samples(&self, from: Timestamp, to: Timestamp) -> Result<Vec<Sample>, StoreError> {
         let range = params![from.as_second(), to.as_second()];
         let mut stmt = self.conn.prepare(
-            "SELECT at, mode, guard, power_kw, used_kwh, projected_kwh, allowed_kwh, limit_kwh
+            "SELECT at, mode, guard, power_kw, used_kwh, projected_kwh, allowed_kwh, limit_kwh,
+                    ev_power_kw, ev_offered_a, ev_max_a, ev_limit_a, ev_overridden
              FROM samples WHERE at >= ?1 AND at < ?2 ORDER BY at",
         )?;
         let rows = stmt.query_map(range, SampleRow::read)?;
@@ -612,6 +629,11 @@ struct SampleRow {
     projected: Option<f64>,
     allowed: f64,
     limit: f64,
+    ev_power: Option<f64>,
+    ev_offered: Option<f64>,
+    ev_max: Option<f64>,
+    ev_limit: Option<f64>,
+    ev_overridden: Option<bool>,
 }
 
 impl SampleRow {
@@ -625,6 +647,11 @@ impl SampleRow {
             projected: r.get(5)?,
             allowed: r.get(6)?,
             limit: r.get(7)?,
+            ev_power: r.get(8)?,
+            ev_offered: r.get(9)?,
+            ev_max: r.get(10)?,
+            ev_limit: r.get(11)?,
+            ev_overridden: r.get(12)?,
         })
     }
 
@@ -643,6 +670,13 @@ impl SampleRow {
             allowed: Kwh::new(self.allowed),
             limit: Kwh::new(self.limit),
             zones: Vec::new(),
+            charger: self.ev_overridden.map(|overridden| ChargerSample {
+                power: self.ev_power.map(Kw::new),
+                offered: self.ev_offered.map(Ampere::new),
+                max: self.ev_max.map(Ampere::new),
+                limit: self.ev_limit.map(Ampere::new),
+                overridden,
+            }),
         })
     }
 }
@@ -801,7 +835,9 @@ impl Store for MemoryStore {
 
 #[cfg(test)]
 mod tests {
-    use energybrain_core::charger::ChargerWrite;
+    use energybrain_core::charger::{
+        ChargerMode, ChargerReading, ChargerStatus, ChargerTarget, ChargerWrite,
+    };
     use energybrain_core::energy::Freshness;
     use energybrain_core::guard::ReleaseReason;
     use energybrain_core::io::ZoneStatus;
@@ -1169,6 +1205,56 @@ mod tests {
         }
     }
 
+    fn charger_status() -> ChargerStatus {
+        ChargerStatus {
+            freshness: Freshness::Fresh,
+            available: true,
+            reading: Some(ChargerReading {
+                at: ts("2026-11-15T17:20:50Z"),
+                mode: ChargerMode::Charging,
+                power: Kw::new(2.3),
+                session: Kwh::new(4.1),
+                dynamic_current: Some(Ampere::new(10.0)),
+                max_current: Some(Ampere::new(15.0)),
+                offered: Ampere::new(10.0),
+                connected: true,
+            }),
+            limit: Some(ChargerTarget::Limit(Ampere::new(10.0))),
+            shed_allowed: true,
+            override_until: Some(ts("2026-11-15T19:00:00Z")),
+        }
+    }
+
+    /// A version 2 database keeps its samples; they have no charger part.
+    #[test]
+    fn migration_3_adds_the_charger_to_old_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v2.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL);
+                 INSERT INTO schema_version VALUES (2);",
+            )
+            .unwrap();
+            for sql in &MIGRATIONS[..2] {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute_batch(
+                "INSERT INTO samples VALUES (1794848400, 'observe', 'idle', 6.1, 1, NULL, 5, 4.7)",
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let s = SqliteStore::open(&path).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 3);
+        let samples = s.samples(Timestamp::MIN, Timestamp::MAX).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].power, Some(Kw::new(6.1)));
+        assert_eq!(samples[0].charger, None);
+    }
+
     fn publish(s: &mut SqliteStore, statuses: &[Status]) {
         let out: Vec<Output> = statuses
             .iter()
@@ -1195,12 +1281,24 @@ mod tests {
         later.power = None;
         later.projected = None;
         later.zones.reverse();
+        later.charger = Some(charger_status());
         publish(
             &mut s,
             &[first.clone(), status("2026-11-15T17:20:55Z"), later.clone()],
         );
         let samples = s.samples(Timestamp::MIN, Timestamp::MAX).unwrap();
         assert_eq!(samples, [Sample::of(&first), Sample::of(&later)]);
+        assert_eq!(samples[0].charger, None, "no charger configured");
+        assert_eq!(
+            samples[1].charger,
+            Some(ChargerSample {
+                power: Some(Kw::new(2.3)),
+                offered: Some(Ampere::new(10.0)),
+                max: Some(Ampere::new(15.0)),
+                limit: Some(Ampere::new(10.0)),
+                overridden: true,
+            })
+        );
         assert_eq!(
             samples[1].zones[0].id,
             zone("basement"),
@@ -1311,11 +1409,11 @@ mod tests {
         let path = dir.path().join("eb.db");
         {
             let mut s = SqliteStore::open(&path).unwrap();
-            assert_eq!(s.schema_version().unwrap(), 2);
+            assert_eq!(s.schema_version().unwrap(), 3);
             s.apply(&outputs()).unwrap();
         }
         let s = SqliteStore::open(&path).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
+        assert_eq!(s.schema_version().unwrap(), 3);
         assert_eq!(s.load(ts(SINCE)).unwrap(), expected(ts(SINCE)));
     }
 
@@ -1331,7 +1429,7 @@ mod tests {
         let err = SqliteStore::open(&path).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "database schema version 99 is newer than this build knows (2)"
+            "database schema version 99 is newer than this build knows (3)"
         );
     }
 
@@ -1427,7 +1525,7 @@ mod tests {
         };
         let sample = |mode: &str, guard: &str| {
             format!(
-                "INSERT INTO samples VALUES (1794848400, '{mode}', '{guard}', NULL, 1, NULL, 5, 4.7);"
+                "INSERT INTO samples VALUES (1794848400, '{mode}', '{guard}', NULL, 1, NULL, 5, 4.7, NULL, NULL, NULL, NULL, NULL);"
             )
         };
         assert_eq!(
@@ -1456,7 +1554,7 @@ mod tests {
         ))
         .starts_with("sqlite: "));
         assert!(corrupt_sample(
-            "INSERT INTO samples VALUES (1794848400, 'observe', 'idle', NULL, 'x', NULL, 5, 4.7)"
+            "INSERT INTO samples VALUES (1794848400, 'observe', 'idle', NULL, 'x', NULL, 5, 4.7, NULL, NULL, NULL, NULL, NULL)"
         )
         .starts_with("sqlite: "));
     }

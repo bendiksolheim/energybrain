@@ -11,6 +11,9 @@
   --s1: #2a78d6;
   --s2: #eb6834;
   --s1-soft: rgba(42, 120, 214, 0.40);
+  --s3: #1b9e77;
+  --s3-soft: rgba(27, 158, 119, 0.25);
+  --override: rgba(42, 120, 214, 0.14);
   --other: #c3c2b7;
   --shed: rgba(236, 131, 90, 0.18);
   --unreachable: rgba(208, 59, 59, 0.22);
@@ -89,6 +92,7 @@ button.ghost { background: transparent; }
 .bands { display: flex; flex-wrap: wrap; gap: 12px; color: var(--ink-2); font-size: 12px; margin-top: 4px; }
 .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 4px; }
 .sw.shed { background: var(--shed); }
+.sw.override { background: var(--override); }
 .sw.unreachable { background: var(--unreachable); }
 .sw.stale { background: var(--stale); }
 

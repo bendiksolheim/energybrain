@@ -316,7 +316,8 @@ sane, topics non-empty. Errors are typed and point at the offending key.
   kwh REAL, PK(zone, hour_start_utc))`, `zone_stats(zone TEXT PK, heating_kw REAL)`,
   `events(id INTEGER PK, at INTEGER, kind TEXT, zone TEXT NULL, detail TEXT)` (`SqliteStore::prune_events` exists but is not scheduled in phase 1: a few
   dozen events a day is negligible). Migration 2 adds `samples` and `zone_samples`
-  (1-minute status snapshots for the history page, pruned after a retention period, §8).
+  (1-minute status snapshots for the history page, pruned after a retention period, §8);
+  migration 3 adds the EV charger's columns to `samples` (§9, E6).
   Schema migrations run on open, with a
   `schema_version` table.
 - Daily peaks are **derived** from `hourly_energy`, not stored separately.
@@ -1031,8 +1032,16 @@ the router. `main` binds it on a free port, replaces `[ev] api_url` from `config
 with that address, and scales the link's poll and backoff to simulated time.
 `sim/ev/set` plugs a car in or out; `sim/charger/set` is the app's temporary limit.
 
-**E6 — History page.** EV power stacked in the house-power chart, offered and limited
-amps in their own small chart (store migration 3: charger columns in `samples`).
+**E6 — History page. ✅** `Sample` gains `charger: Option<ChargerSample>` (power, offered,
+the user's charger limit, the guard's limit, overridden). Reading values are left out
+unless the reading is fresh, so a stale charger shows as a gap. Store migration 3 adds
+`ev_power_kw`, `ev_offered_a`, `ev_max_a`, `ev_limit_a` and `ev_overridden` to `samples`;
+`ev_overridden` is NULL when no charger was configured, which is how a sample without a
+charger reads back as `None` (older samples included). `/api/day` has `samples.ev` (null
+on days without a charger sample): its power, `stacked` (floors + EV, computed in Rust),
+offered, max, limit and overridden. The page stacks the EV on the floors in the power
+chart (shaded band), shows an "EV charger" chart (offered, guard limit, charger limit,
+override shaded), an EV tile in the header, and describes the charger events.
 
 **Go-live:** at least a week of observe mode with the car charging on several evenings.
 Check the would-limit events against reality, decide `pause_allowed` from E0, then enable

@@ -1,0 +1,64 @@
+---
+source: crates/http/src/history.rs
+assertion_line: 948
+expression: json(&ev)
+---
+{
+  "power": {
+    "unit": "kW",
+    "values": [
+      null,
+      2.3,
+      null,
+      null,
+      1.4
+    ]
+  },
+  "stacked": {
+    "unit": "kW",
+    "values": [
+      null,
+      3.6999999999999997,
+      null,
+      null,
+      1.4
+    ]
+  },
+  "offered": {
+    "unit": "A",
+    "values": [
+      null,
+      10.0,
+      null,
+      null,
+      10.0
+    ]
+  },
+  "max": {
+    "unit": "A",
+    "values": [
+      null,
+      16.0,
+      16.0,
+      null,
+      16.0
+    ]
+  },
+  "limit": {
+    "unit": "A",
+    "values": [
+      null,
+      9.0,
+      0.0,
+      null,
+      null
+    ]
+  },
+  "overridden": [
+    null,
+    false,
+    false,
+    null,
+    true
+  ]
+}

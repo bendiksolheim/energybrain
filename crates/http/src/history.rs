@@ -12,12 +12,12 @@ use std::sync::Arc;
 use energybrain_core::energy::{HourEnergy, Quality};
 use energybrain_core::guard::GuardStatus;
 use energybrain_core::ids::ZoneId;
-use energybrain_core::io::{Sample, ZoneSample};
+use energybrain_core::io::{ChargerSample, Sample, ZoneSample};
 use energybrain_core::mode::Mode;
 use energybrain_core::peaks::{DayPeak, MonthLedger};
 use energybrain_core::tariff::{CapacityTariff, Tier};
 use energybrain_core::time::{HourStart, LocalCalendar, LocalMonth};
-use energybrain_core::units::{Celsius, Kw, Kwh};
+use energybrain_core::units::{Ampere, Celsius, Kw, Kwh};
 use jiff::civil::Date;
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
@@ -190,6 +190,26 @@ pub struct SampleColumns {
     pub limit: Series,
     /// Per zone, in configuration order.
     pub zones: Vec<ZoneColumns>,
+    /// The EV charger, if any sample of the day has one.
+    pub ev: Option<EvColumns>,
+}
+
+/// The EV charger's part of the sample log.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EvColumns {
+    /// The charger's power.
+    pub power: Series,
+    /// The floors' power with the charger's on top (`null` where the charger's is unknown),
+    /// for stacking it in the power chart.
+    pub stacked: Series,
+    /// The current the charger offers.
+    pub offered: Series,
+    /// The user's charger limit.
+    pub max: Series,
+    /// The guard's limit (observe mode: what it would have set); 0 A is a pause.
+    pub limit: Series,
+    /// Whether the user's temporary limit overrode the guard.
+    pub overridden: Vec<Option<bool>>,
 }
 
 /// One zone's part of the sample log.
@@ -455,7 +475,32 @@ fn sample_columns(site: &Site, samples: &[Sample]) -> SampleColumns {
         allowed: col(Kwh::UNIT, &|s| Some(s.allowed.value())),
         limit: col(Kwh::UNIT, &|s| Some(s.limit.value())),
         zones,
+        ev: ev_columns(site, &rows),
     }
+}
+
+fn ev_columns(site: &Site, rows: &[(Timestamp, Option<&Sample>)]) -> Option<EvColumns> {
+    let parts: Vec<Option<(&Sample, &ChargerSample)>> = rows
+        .iter()
+        .map(|(_, s)| s.and_then(|s| s.charger.as_ref().map(|c| (s, c))))
+        .collect();
+    if parts.iter().all(Option::is_none) {
+        return None;
+    }
+    let col = |unit, f: &dyn Fn(&Sample, &ChargerSample) -> Option<f64>| {
+        Series::new(unit, parts.iter().map(|p| p.and_then(|(s, c)| f(s, c))))
+    };
+    Some(EvColumns {
+        power: col(Kw::UNIT, &|_, c| c.power.map(Kw::value)),
+        stacked: col(Kw::UNIT, &|s, c| {
+            c.power
+                .map(|p| floors(site, s).unwrap_or_default() + p.value())
+        }),
+        offered: col(Ampere::UNIT, &|_, c| c.offered.map(Ampere::value)),
+        max: col(Ampere::UNIT, &|_, c| c.max.map(Ampere::value)),
+        limit: col(Ampere::UNIT, &|_, c| c.limit.map(Ampere::value)),
+        overridden: parts.iter().map(|p| p.map(|(_, c)| c.overridden)).collect(),
+    })
 }
 
 /// The configured zones' power in `s` added up, if any of them has reported.
@@ -614,6 +659,7 @@ pub(crate) mod tests {
                     overridden: true,
                 },
             ],
+            charger: None,
         }
     }
 
@@ -860,6 +906,51 @@ pub(crate) mod tests {
         );
         s.zones.iter_mut().for_each(|z| z.power = None);
         assert_eq!(floors(&site(), &s), None);
+    }
+
+    #[test]
+    fn the_charger_gets_its_own_columns_on_days_it_was_sampled() {
+        let ev = |power: Option<f64>, limit: Option<f64>, overridden| ChargerSample {
+            power: power.map(Kw::new),
+            offered: power.map(|_| Ampere::new(10.0)),
+            max: Some(Ampere::new(16.0)),
+            limit: limit.map(Ampere::new),
+            overridden,
+        };
+        let mut samples = vec![
+            // Before the charger was configured.
+            sample("2026-11-15T16:58:00Z", 4.3, false),
+            sample("2026-11-15T16:59:00Z", 4.4, true),
+            sample("2026-11-15T17:00:00Z", 0.1, true),
+            sample("2026-11-15T17:10:00Z", 1.0, false),
+        ];
+        samples[1].charger = Some(ev(Some(2.3), Some(9.0), false));
+        // A stale reading: no power, so nothing to stack.
+        samples[2].charger = Some(ev(None, Some(0.0), false));
+        samples[3].charger = Some(ev(Some(1.4), None, true));
+        samples[3].zones.iter_mut().for_each(|z| z.power = None);
+        let view = view_of_day(
+            date(2026, 11, 15),
+            History {
+                samples,
+                ..History::default()
+            },
+        );
+        let ev = view.samples.ev.unwrap();
+        // Four samples and the gap before the last one.
+        assert_eq!(ev.power.values, [None, Some(2.3), None, None, Some(1.4)]);
+        assert_eq!(
+            ev.stacked.values,
+            [None, Some(1.4 + 2.3), None, None, Some(1.4)]
+        );
+        assert_eq!(ev.limit.values, [None, Some(9.0), Some(0.0), None, None]);
+        assert_eq!(
+            ev.overridden,
+            [None, Some(false), Some(false), None, Some(true)]
+        );
+        insta::assert_snapshot!(json(&ev));
+        let without = view_of_day(date(2026, 11, 15), day_history());
+        assert_eq!(without.samples.ev, None);
     }
 
     #[test]

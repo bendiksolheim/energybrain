@@ -171,6 +171,16 @@ function tierText(t) {
   return `${num(t.from.value, 0)}–${to} kW`;
 }
 
+/** The EV charger: what it draws, what it offers, and the guard's limit or override. */
+function evTile(c) {
+  const r = c.reading;
+  if (!r || c.freshness !== "fresh") return tile("EV", "–", c.freshness.replace("_", " "));
+  const limit = c.limit ? (c.limit.type === "pause" ? "paused" : `limit ${qty(c.limit.current, 0)}`) : null;
+  const detail = [r.mode.replaceAll("_", " "), `${qty(r.offered, 0)} offered`,
+    c.override_until ? "app limit" : limit].filter((x) => x).join(" · ");
+  return tile("EV", qty(r.power), detail);
+}
+
 async function loadStatus() {
   const box = $("status");
   try {
@@ -184,6 +194,7 @@ async function loadStatus() {
       tile("This hour", `${qty(s.used)} of ${qty(s.limit.effective)}`,
         `projected ${qty(s.projected)}`),
       tile("Power", qty(s.power), s.freshness === "fresh" ? null : `meter ${s.freshness.replace("_", " ")}`),
+      ...(s.charger ? [evTile(s.charger)] : []),
       tile("Month", `${qty(s.top_average)} top-3 average`,
         `tier ${tierText(s.tier)} · ${num(s.tier.price.value, 0)} kr/month`),
     );
@@ -259,19 +270,47 @@ function renderDay(d) {
     return c;
   };
 
-  // Power.
+  // Power, with the EV (if any) stacked on the floors.
   const power = container("c-power");
+  const ev = sm.ev;
   if (at.length) {
-    minuteChart(power, {
-      height: 220,
-      axes: axes("kW"),
+    const s3 = css("--s3");
+    const series = [
+      { value: (u, v) => (v == null ? "–" : hm(v)) },
+      line("House", s1, "kW", 2),
+      line("Floors", s2, "kW", 2),
+    ];
+    const data = [at, sm.power.values, sm.floors.values];
+    const opts = { height: 220, axes: axes("kW"), series,
+      scales: { y: { range: (u, a, b) => [0, Math.max(1, b * 1.1)] } } };
+    if (ev) {
+      series.push(line("Floors + EV", s3, "kW", 2, { width: 1.5 }));
+      // Readout only: the charger's own power, in the legend.
+      series.push(line("EV", "transparent", "kW", 2, { paths: () => null }));
+      data.push(ev.stacked.values, ev.power.values);
+      opts.bands = [{ series: [3, 2], fill: css("--s3-soft") }];
+    }
+    minuteChart(power, opts, data);
+  }
+
+  // The EV charger's currents, only on days it was sampled.
+  $("ev-card").hidden = !ev;
+  const evBox = $("c-ev");
+  evBox.replaceChildren();
+  if (ev) {
+    const stepped = uPlot.paths.stepped({ align: 1 });
+    minuteChart(evBox, {
+      height: 180,
+      axes: axes("A"),
       series: [
         { value: (u, v) => (v == null ? "–" : hm(v)) },
-        line("House", s1, "kW", 2),
-        line("Floors", s2, "kW", 2),
+        line("Offered", css("--s3"), "A", 0, { paths: stepped }),
+        line("Guard limit", s2, "A", 0, { paths: stepped }),
+        line("Charger limit", muted, "A", 0, { width: 1, paths: stepped }),
       ],
-      scales: { y: { range: (u, a, b) => [0, Math.max(1, b * 1.1)] } },
-    }, [at, sm.power.values, sm.floors.values]);
+      scales: { y: { range: (u, a, b) => [0, Math.max(16, b * 1.1)] } },
+      hooks: { drawClear: [bandHook(at, (i) => ev.overridden[i] === true, css("--override"))] },
+    }, [at, ev.offered.values, ev.limit.values, ev.max.values]);
   }
 
   // Hour budget, shaded by guard state.
@@ -348,6 +387,8 @@ const RELEASE = {
   meter_stale: "meter stale",
   not_sheddable: "no longer sheddable (switched off or overridden)",
   guard_off: "guard turned off",
+  car_disconnected: "car unplugged",
+  charger_unavailable: "charger reading stale or offline",
 };
 
 /** [what, zone, details] for one stored event. */
@@ -364,6 +405,14 @@ function describe(e) {
     if (g.type === "release") {
       return [would ? "Would release" : "Released", g.zone, RELEASE[g.reason] || g.reason];
     }
+    if (g.type === "charger_limit") {
+      const what = g.current.value === 0 ? (would ? "Would pause EV" : "Paused EV")
+        : `${would ? "Would limit EV to" : "Limited EV to"} ${qty(g.current, 0)}`;
+      return [what, "EV", `projected ${qty(g.projected)}, limit ${qty(g.limit)}, saves ${qty(g.saving)}`];
+    }
+    if (g.type === "charger_release") {
+      return [would ? "Would release EV" : "Released EV", "EV", RELEASE[g.reason] || g.reason];
+    }
     if (g.type === "limit_unreachable") {
       return ["Limit unreachable", null,
         `projected ${qty(g.projected)}, limit ${qty(g.limit)}, shedding saves ${qty(g.available)}`];
@@ -371,6 +420,9 @@ function describe(e) {
   }
   if (k.type === "override") return ["Override", k.zone, `${qty(k.setpoint, 1)} until ${hm(secs(k.until))}`];
   if (k.type === "override_expired") return ["Override ended", k.zone, ""];
+  if (k.type === "charger_override") {
+    return ["Temporary limit", "EV", `${qty(k.current, 0)} from the app, guard leaves the charger alone until ${hm(secs(k.until))}`];
+  }
   if (k.type === "mode_changed") return ["Mode changed", null, `${k.from} → ${k.to}`];
   return [k.type || "event", null, JSON.stringify(k)];
 }

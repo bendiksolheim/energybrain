@@ -146,8 +146,8 @@ docs don't include a complete `config.json` example.
 ## HTTP
 
 Open `http://server:8080/` in a browser for the **history page**: graphs of a day (energy per
-hour against the limit, power, the hour budget, each floor's setpoints and sheds, and the
-events) and of a month (the highest hour per day, the top 3, the tier, and a day × hour
+hour against the limit, power, the hour budget, the EV charger's current and limits, each
+floor's setpoints and sheds, and the events) and of a month (the highest hour per day, the top 3, the tier, and a day × hour
 heatmap). Minute-level detail is kept for `store.sample_retention_days` (default 90); older
 days still show their hourly energy and events.
 
