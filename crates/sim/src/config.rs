@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use energybrain_config::Config;
 use energybrain_core::mode::Mode;
-use energybrain_core::units::{Celsius, Kw, Kwh};
+use energybrain_core::units::{Ampere, Celsius, Kw, Kwh};
 use jiff::civil::{DateTime, Time};
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
@@ -76,6 +76,8 @@ pub struct SimConfig {
     pub appliances: Vec<Appliance>,
     /// Daily EV charging sessions.
     pub ev: Vec<EvSession>,
+    /// The charger's limit set in the Easee app ("Charger limit").
+    pub charger_limit: Ampere,
     /// One per energybrain zone, in its order.
     pub floors: Vec<FloorSpec>,
     /// The meter topic.
@@ -129,10 +131,15 @@ struct Raw {
     appliances: Vec<RawAppliance>,
     #[serde(default)]
     ev: Vec<RawEv>,
+    #[serde(default = "default_charger_limit")]
+    charger_limit_a: f64,
     #[serde(default, rename = "floor")]
     floors: Vec<RawFloor>,
 }
 
+fn default_charger_limit() -> f64 {
+    32.0
+}
 fn default_factor() -> u16 {
     6
 }
@@ -334,6 +341,7 @@ impl Raw {
             heat_pump: Kw::new(non_negative("heat_pump.max_kw", self.heat_pump.max_kw)?),
             appliances,
             ev,
+            charger_limit: Ampere::new(positive("charger_limit_a", self.charger_limit_a)?),
             floors: floors(self.floors, eb)?,
             meter_topic: eb.topics.meter.clone(),
             tz,
@@ -453,6 +461,7 @@ impl RawFloor {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use energybrain_core::charger::ChargerConfig;
 
     const EXAMPLE: &str = include_str!("../../../config/example.toml");
 
@@ -730,9 +739,15 @@ pub(crate) mod tests {
         assert_eq!(sim.initial_mode, Some(Mode::Active));
         assert_eq!(dev.mqtt.host, "127.0.0.1");
         assert_eq!(dev.store_path, PathBuf::from("target/dev/energybrain.db"));
-        // Same zones, topics and tariff as the real house.
+        // Same zones, topics and tariff as the real house, plus the simulated charger (its
+        // section is commented out in example.toml).
         let real = eb();
-        assert_eq!(dev.topics, real.topics);
+        assert_eq!(dev.topics.zones, real.topics.zones);
+        assert_eq!(dev.topics.meter, real.topics.meter);
+        assert_eq!(dev.topics.prefix, real.topics.prefix);
+        assert!(dev.topics.ev && dev.easee.is_some());
+        assert_eq!(dev.engine.charger, Some(ChargerConfig::default()));
+        assert_eq!(sim.charger_limit, Ampere::new(16.0));
         assert_eq!(dev.engine.zones, real.engine.zones);
         assert_eq!(dev.engine.tariff, real.engine.tariff);
         assert_eq!(dev.engine.target, real.engine.target);

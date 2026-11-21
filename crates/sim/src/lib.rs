@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod driver;
+pub mod easee;
 pub mod floor;
 pub mod house;
 pub mod loads;

@@ -1,7 +1,14 @@
 //! Everything in the house except the floors: background use, the heat pump, appliances,
-//! the EV charger and extra load added by hand. Only the meter sees these.
+//! the EV on its charger and extra load added by hand. Only the meter sees these (and Easee
+//! sees the charger).
+//!
+//! The car draws `min(its demand, offered current × 230 V)`, nothing below 6 A, and follows a
+//! new offer 20 s later, like a real car ramping. The charger offers the lower of the app's
+//! charger limit and its dynamic current (energybrain's limit, which expires after its TTL,
+//! or the user's temporary limit). Plugging in or out clears the dynamic current, as on an
+//! Easee.
 
-use energybrain_core::units::{Celsius, Kw, Kwh};
+use energybrain_core::units::{Ampere, Celsius, Kw, Kwh, Volt};
 use jiff::civil::Time;
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
@@ -12,6 +19,12 @@ use crate::rng::Rng;
 const HEAT_PUMP_IDLE_AT: f64 = 15.0;
 /// Outdoor temperature at or below which the heat pump runs at full power.
 const HEAT_PUMP_FULL_AT: f64 = -15.0;
+/// Power per amp of offered current: one phase on a 230 V IT net, like the I-Pace.
+const CHARGER_VOLTAGE: Volt = Volt::new(230.0);
+/// Below this a car can't charge.
+const MIN_CURRENT: Ampere = Ampere::new(6.0);
+/// A car follows a new offer this much later.
+const CAR_LAG: SignedDuration = SignedDuration::from_secs(20);
 
 /// Background use by local hour of day (lights, fridge, cooking, ventilation, …).
 #[derive(Debug, Clone, PartialEq)]
@@ -46,8 +59,27 @@ pub struct EvSession {
     pub from: Time,
     /// Energy to charge.
     pub energy: Kwh,
-    /// Charging power.
+    /// What the car takes when offered enough.
     pub power: Kw,
+}
+
+/// What the charger shows (to Easee, and in `sim/state`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChargerState {
+    /// A car is plugged in.
+    pub plugged: bool,
+    /// The plugged-in car is full.
+    pub full: bool,
+    /// What the car draws.
+    pub power: Kw,
+    /// Energy charged since plug-in.
+    pub session: Kwh,
+    /// The dynamic current, if one is in force.
+    pub dynamic: Option<Ampere>,
+    /// The app's "Charger limit".
+    pub limit: Ampere,
+    /// What the pilot signal offers the car.
+    pub offered: Ampere,
 }
 
 /// What each kind of load draws right now.
@@ -72,11 +104,42 @@ impl Breakdown {
     }
 }
 
+/// A plugged-in car.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Charging {
-    power: Kw,
+struct Car {
+    demand: Kw,
     /// `None` for a manual session that runs until switched off.
     remaining: Option<Kwh>,
+    session: Kwh,
+    drawing: Kw,
+    /// When `drawing` catches up with what the car would take now.
+    follows_at: Option<Timestamp>,
+}
+
+impl Car {
+    /// A car plugged in at `at`; it starts drawing `CAR_LAG` later.
+    fn new(demand: Kw, remaining: Option<Kwh>, at: Timestamp) -> Self {
+        Self {
+            demand,
+            remaining,
+            session: Kwh::ZERO,
+            drawing: Kw::ZERO,
+            follows_at: Some(at + CAR_LAG),
+        }
+    }
+
+    fn full(&self) -> bool {
+        self.remaining.is_some_and(|r| r <= Kwh::ZERO)
+    }
+
+    /// What the car would take if offered `offered`.
+    fn wanted(&self, offered: Ampere) -> Kw {
+        if self.full() || offered < MIN_CURRENT {
+            Kw::ZERO
+        } else {
+            self.demand.min(offered * CHARGER_VOLTAGE)
+        }
+    }
 }
 
 /// The loads and their state.
@@ -87,20 +150,25 @@ pub struct Loads {
     heat_pump_max: Kw,
     appliances: Vec<(Appliance, Option<Timestamp>)>,
     sessions: Vec<EvSession>,
-    ev: Option<Charging>,
+    car: Option<Car>,
+    charger_limit: Ampere,
+    /// The dynamic current and when it expires (`None`: until replaced or unplugged).
+    dynamic: Option<(Ampere, Option<Timestamp>)>,
     extra: Kw,
     outdoor: Celsius,
     noise: Kw,
 }
 
 impl Loads {
-    /// Loads at rest: no appliance on, no car charging.
+    /// Loads at rest: no appliance on, no car plugged in. `charger_limit` is the app's
+    /// "Charger limit".
     pub fn new(
         tz: TimeZone,
         background: Background,
         heat_pump_max: Kw,
         appliances: Vec<Appliance>,
         sessions: Vec<EvSession>,
+        charger_limit: Ampere,
         outdoor: Celsius,
     ) -> Self {
         Self {
@@ -109,7 +177,9 @@ impl Loads {
             heat_pump_max,
             appliances: appliances.into_iter().map(|a| (a, None)).collect(),
             sessions,
-            ev: None,
+            car: None,
+            charger_limit,
+            dynamic: None,
             extra: Kw::ZERO,
             outdoor,
             noise: Kw::ZERO,
@@ -129,14 +199,26 @@ impl Loads {
                 *until = Some(at + appliance.duration);
             }
         }
-        for s in &self.sessions {
-            if local.hour() == s.from.hour() && local.minute() == s.from.minute() {
-                self.ev = Some(Charging {
-                    power: s.power,
-                    remaining: Some(s.energy),
-                });
-            }
+        let plug_in = self
+            .sessions
+            .iter()
+            .find(|s| local.hour() == s.from.hour() && local.minute() == s.from.minute())
+            .map(|s| Car::new(s.power, Some(s.energy), at));
+        if let Some(car) = plug_in {
+            self.plug(Some(car));
         }
+    }
+
+    /// Plugs a car in (or out, with `None`); either clears the dynamic current.
+    fn plug(&mut self, car: Option<Car>) {
+        self.car = car;
+        self.dynamic = None;
+    }
+
+    /// What the charger offers the car.
+    fn offered(&self) -> Ampere {
+        self.dynamic
+            .map_or(self.charger_limit, |(a, _)| a.min(self.charger_limit))
     }
 
     /// Lets time pass until `to` after `dt`: appliances finish and the car charges.
@@ -146,16 +228,53 @@ impl Loads {
                 *until = None;
             }
         }
-        if let Some(Charging {
-            power,
-            remaining: Some(left),
-        }) = &mut self.ev
-        {
-            *left -= *power * dt;
-            if *left <= Kwh::ZERO {
-                self.ev = None;
+        self.dynamic = self
+            .dynamic
+            .filter(|(_, until)| until.is_none_or(|u| u > to));
+        let offered = self.offered();
+        if let Some(car) = &mut self.car {
+            let charged = car.drawing * dt;
+            car.session += charged;
+            if let Some(left) = &mut car.remaining {
+                *left -= charged;
             }
+            if car.full() {
+                car.drawing = Kw::ZERO;
+            }
+            let wanted = car.wanted(offered);
+            car.follows_at = match car.follows_at {
+                _ if (wanted - car.drawing).value().abs() < 1e-9 => None,
+                Some(at) if to >= at => {
+                    car.drawing = wanted;
+                    None
+                }
+                Some(at) => Some(at),
+                None => Some(to + CAR_LAG),
+            };
         }
+    }
+
+    /// What the charger shows at the moment.
+    pub fn charger(&self) -> ChargerState {
+        ChargerState {
+            plugged: self.car.is_some(),
+            full: self.car.is_some_and(|c| c.full()),
+            power: self.car.map_or(Kw::ZERO, |c| c.drawing),
+            session: self.car.map_or(Kwh::ZERO, |c| c.session),
+            dynamic: self.dynamic.map(|(a, _)| a),
+            limit: self.charger_limit,
+            offered: if self.car.is_some() {
+                self.offered()
+            } else {
+                Ampere::ZERO
+            },
+        }
+    }
+
+    /// Sets the charger's dynamic current until `until` (`None`: until replaced or
+    /// unplugged), as Easee's `set_dynamic_charger_current` or the app's temporary limit do.
+    pub fn set_dynamic(&mut self, current: Option<Ampere>, until: Option<Timestamp>) {
+        self.dynamic = current.map(|a| (a, until));
     }
 
     /// What each load draws at `at`.
@@ -179,7 +298,7 @@ impl Loads {
                 .filter(|(_, until)| until.is_some())
                 .map(|(a, _)| a.power)
                 .sum(),
-            ev: self.ev.map_or(Kw::ZERO, |c| c.power),
+            ev: self.car.map_or(Kw::ZERO, |c| c.drawing),
             extra: self.extra,
         }
     }
@@ -193,12 +312,9 @@ impl Loads {
             .collect()
     }
 
-    /// Starts charging at `power` until switched off, or stops charging (`None`).
-    pub fn set_ev(&mut self, power: Option<Kw>) {
-        self.ev = power.map(|power| Charging {
-            power,
-            remaining: None,
-        });
+    /// Plugs in a car at `at` that takes `power` until unplugged, or unplugs it (`None`).
+    pub fn set_ev(&mut self, power: Option<Kw>, at: Timestamp) {
+        self.plug(power.map(|p| Car::new(p, None, at)));
     }
 
     /// Extra constant load, replacing the previous one.
@@ -252,6 +368,7 @@ pub(crate) mod tests {
             Kw::new(1.5),
             appliances,
             sessions,
+            Ampere::new(16.0),
             Celsius::new(-5.0),
         )
     }
@@ -328,33 +445,72 @@ pub(crate) mod tests {
         assert_eq!(l.breakdown(t).appliances, Kw::ZERO);
     }
 
+    /// Advances `l` from `from` in 1 s steps for `secs` seconds.
+    fn run(l: &mut Loads, from: Timestamp, secs: i64) -> Timestamp {
+        let mut t = from;
+        for _ in 0..secs {
+            t += SignedDuration::from_secs(1);
+            l.advance(SignedDuration::from_secs(1), t);
+        }
+        t
+    }
+
     #[test]
-    fn ev_sessions_start_at_plug_in_and_stop_when_charged() {
+    fn ev_sessions_plug_in_ramp_up_and_stop_when_charged() {
         let session = EvSession {
             from: Time::constant(17, 30, 0, 0),
-            energy: Kwh::new(1.0),
-            power: Kw::new(6.0),
+            energy: Kwh::new(0.5),
+            power: Kw::new(3.0),
         };
         let mut l = loads(vec![], vec![session]);
         let mut rng = Rng::new(1);
         l.minute(ts("2026-12-01T16:29:00Z"), &mut rng);
-        assert_eq!(l.breakdown(ts("2026-12-01T16:29:00Z")).ev, Kw::ZERO);
-        l.minute(ts("2026-12-01T16:30:00Z"), &mut rng);
-        assert_eq!(l.breakdown(ts("2026-12-01T16:30:00Z")).ev, Kw::new(6.0));
-        // 1 kWh at 6 kW takes 10 minutes.
-        l.advance(SignedDuration::from_mins(9), ts("2026-12-01T16:39:00Z"));
-        assert_eq!(l.breakdown(ts("2026-12-01T16:39:00Z")).ev, Kw::new(6.0));
-        l.advance(SignedDuration::from_mins(1), ts("2026-12-01T16:40:00Z"));
-        assert_eq!(l.breakdown(ts("2026-12-01T16:40:00Z")).ev, Kw::ZERO);
+        assert!(!l.charger().plugged);
+        assert_eq!(l.charger().offered, Ampere::ZERO);
+        let t = ts("2026-12-01T16:30:00Z");
+        l.minute(t, &mut rng);
+        assert!(l.charger().plugged);
+        // The car starts 20 s after plug-in.
+        let t = run(&mut l, t, 19);
+        assert_eq!(l.breakdown(t).ev, Kw::ZERO);
+        let t = run(&mut l, t, 1);
+        assert_eq!(l.breakdown(t).ev, Kw::new(3.0));
+        // 0.5 kWh at 3 kW takes 10 minutes; then it is full and draws nothing.
+        let t = run(&mut l, t, 600);
+        let c = l.charger();
+        assert!(c.full && c.plugged);
+        assert_eq!(l.breakdown(t).ev, Kw::ZERO);
+        assert!((c.session.value() - 0.5).abs() < 1e-9, "{}", c.session);
     }
 
     #[test]
-    fn manual_ev_charging_runs_until_switched_off() {
+    fn the_car_follows_the_offer_and_limits_expire() {
         let mut l = loads(vec![], vec![]);
-        l.set_ev(Some(Kw::new(7.4)));
-        l.advance(SignedDuration::from_hours(10), ts("2026-12-01T10:00:00Z"));
-        assert_eq!(l.breakdown(ts("2026-12-01T10:00:00Z")).ev, Kw::new(7.4));
-        l.set_ev(None);
-        assert_eq!(l.breakdown(ts("2026-12-01T10:00:00Z")).ev, Kw::ZERO);
+        let t = ts("2026-12-01T10:00:00Z");
+        l.set_ev(Some(Kw::new(7.4)), t);
+        let t = run(&mut l, t, 25);
+        // The app's 16 A charger limit caps a car that would take 7.4 kW.
+        assert_eq!(l.breakdown(t).ev, Ampere::new(16.0) * CHARGER_VOLTAGE);
+        // energybrain limits it to 9 A for a minute: followed 20 s later, then it expires.
+        l.set_dynamic(
+            Some(Ampere::new(9.0)),
+            Some(t + SignedDuration::from_mins(1)),
+        );
+        assert_eq!(l.charger().dynamic, Some(Ampere::new(9.0)));
+        assert_eq!(l.charger().offered, Ampere::new(9.0));
+        let t = run(&mut l, t, 21);
+        assert_eq!(l.breakdown(t).ev, Ampere::new(9.0) * CHARGER_VOLTAGE);
+        let t = run(&mut l, t, 40);
+        assert_eq!(l.charger().dynamic, None);
+        let t = run(&mut l, t, 21);
+        assert_eq!(l.breakdown(t).ev, Ampere::new(16.0) * CHARGER_VOLTAGE);
+        // Below 6 A nothing flows; a limit without expiry stays until unplugged.
+        l.set_dynamic(Some(Ampere::new(5.0)), None);
+        let t = run(&mut l, t, 21);
+        assert_eq!(l.breakdown(t).ev, Kw::ZERO);
+        assert!(!l.charger().full);
+        l.set_ev(None, t);
+        assert_eq!(l.charger().dynamic, None, "unplugging clears it");
+        assert_eq!(l.breakdown(t).ev, Kw::ZERO);
     }
 }

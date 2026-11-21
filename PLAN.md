@@ -625,7 +625,8 @@ Two files, so the production config schema (unknown keys rejected) stays free of
   starting register, as a real meter's would.
 - **Control topics** (`sim/…`, for poking at a live run from MQTT Explorer or
   `mosquitto_pub`):
-  - `sim/ev/set` takes `off` or a power in kW;
+  - `sim/ev/set` takes `off` (unplug) or a power in kW (plug in a car taking up to that);
+  - `sim/charger/set` takes `off` or amps: the Easee app's temporary limit (E5);
   - `sim/load/set` adds extra load in kW;
   - `sim/meter/set` takes `pause` or `resume`, to test the stale-meter path;
   - `sim/outdoor/set` takes a temperature in °C;
@@ -1018,10 +1019,17 @@ charger section. `/healthz` stays 200 when only the charger is stale. Compose pa
 optional `ENERGYBRAIN_EASEE_*` variables (an empty variable counts as unset). `run()` is now a
 thin wrapper boxing the shutdown future, so its body has one instantiation (coverage).
 
-**E5 — Simulator.** The sim serves a fake Easee API (axum) backed by its EV model. The EV
-then draws `min(offered, car_max) × 230 V`, ramping over ~20 s, with the TTL obeyed. This
-replaces `sim/ev/set` power with a plug-in/plug-out control. `config/dev.toml` points
-`api_url` at it.
+**E5 — Simulator. ✅** `loads` models a car on a charger: it draws
+`min(demand, offered × 230 V)`, nothing below 6 A, following a new offer 20 s later (from
+plug-in time for a fresh car); offered = the app's charger limit (`charger_limit_a` in
+`sim.toml`, 16 A) or a lower dynamic current, which expires after its TTL; plugging in or out
+clears it. A full car stays plugged in, drawing nothing (Easee mode 4). `sim::easee` serves
+the fake Easee API (axum): each poll/command becomes a request to the driver, which answers
+from the house (the house stays pure). Its JSON goes through energybrain's own
+`energybrain_easee::api::reading` in a test, and energybrain's real `Client` is tested against
+the router. `main` binds it on a free port, replaces `[ev] api_url` from `config/dev.toml`
+with that address, and scales the link's poll and backoff to simulated time.
+`sim/ev/set` plugs a car in or out; `sim/charger/set` is the app's temporary limit.
 
 **E6 — History page.** EV power stacked in the house-power chart, offered and limited
 amps in their own small chart (store migration 3: charger columns in `samples`).

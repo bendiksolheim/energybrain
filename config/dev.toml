@@ -100,3 +100,13 @@ id = "basement"
 name = "Basement"
 device = "zwave/Basement/Floor_basement"
 priority = 6
+
+# The EV charger, served by the simulator's fake Easee (its URL replaces api_url at start).
+# Credentials are dummies; the fake accepts anything. See PLAN.md §9.
+[ev]
+serial = "EH-SIM"
+username = "sim"
+password = "sim"
+api_url = "http://127.0.0.1"
+phases = 1
+pause_allowed = false

@@ -16,7 +16,7 @@ use serde_json::json;
 use crate::Publish;
 use crate::config::SimConfig;
 use crate::floor::Floor;
-use crate::loads::Loads;
+use crate::loads::{ChargerState, Loads};
 use crate::rng::Rng;
 
 /// How far a floor's environment leans from the indoor towards the outdoor temperature.
@@ -109,6 +109,7 @@ impl House {
                 cfg.heat_pump,
                 cfg.appliances.clone(),
                 cfg.ev.clone(),
+                cfg.charger_limit,
                 cfg.outdoor,
             ),
             floors,
@@ -150,6 +151,17 @@ impl House {
     /// Whole-house power, as the meter measures it.
     pub fn power(&self) -> Kw {
         self.loads.breakdown(self.now).total() + self.floors_power()
+    }
+
+    /// What the EV charger shows (what an Easee poll sees).
+    pub fn charger(&self) -> ChargerState {
+        self.loads.charger()
+    }
+
+    /// Easee's `set_dynamic_charger_current`: limits the charger to `current` for `ttl` from
+    /// [`House::now`].
+    pub fn set_dynamic_current(&mut self, current: Ampere, ttl: SignedDuration) {
+        self.loads.set_dynamic(Some(current), Some(self.now + ttl));
     }
 
     /// The floors.
@@ -244,8 +256,13 @@ impl House {
         };
         let mut out = Vec::new();
         match control.split('/').collect::<Vec<_>>().as_slice() {
-            ["ev"] if text.eq_ignore_ascii_case("off") => self.loads.set_ev(None),
-            ["ev"] => self.loads.set_ev(Some(Kw::new(positive(text)?))),
+            ["ev"] if text.eq_ignore_ascii_case("off") => self.loads.set_ev(None, self.now),
+            ["ev"] => self.loads.set_ev(Some(Kw::new(positive(text)?)), self.now),
+            // The app's "Temporary charging limit": in force until replaced or unplugged.
+            ["charger"] if text.eq_ignore_ascii_case("off") => self.loads.set_dynamic(None, None),
+            ["charger"] => self
+                .loads
+                .set_dynamic(Some(Ampere::new(non_negative(text)?)), None),
             ["load"] => self.loads.set_extra(Kw::new(non_negative(text)?)),
             ["meter"] => {
                 self.meter_paused = match text.to_ascii_lowercase().as_str() {
@@ -440,6 +457,7 @@ impl House {
     /// as `{"value": …, "unit": …}` like energybrain's own API.
     fn state(&self) -> Publish {
         let b = self.loads.breakdown(self.now);
+        let c = self.loads.charger();
         let kw = |v: Kw| Kw::new(round(v.value(), 3));
         let floors: Vec<_> = self
             .floors
@@ -463,6 +481,12 @@ impl House {
                 "ev": kw(b.ev),
                 "extra": kw(b.extra),
                 "floors": kw(self.floors_power()),
+            },
+            "charger": {
+                "plugged": c.plugged,
+                "offered": c.offered,
+                "dynamic": c.dynamic,
+                "limit": c.limit,
             },
             "running": self.loads.running(),
             "outdoor": self.loads.outdoor(),
@@ -696,10 +720,24 @@ mod tests {
     fn ev_and_extra_load_show_up_on_the_meter() {
         let (mut h, _) = house("");
         h.step(h.now() + secs(1));
-        let before = h.power();
         let out = h.on_message("sim/ev/set", b"7.4").unwrap();
-        assert_eq!(state(&out)["loads"]["ev"]["value"], 7.4);
-        assert!((h.power() - before - Kw::new(7.4)).value().abs() < 1e-9);
+        // Plugged in, but the car starts drawing 20 s later.
+        assert_eq!(state(&out)["loads"]["ev"]["value"], 0.0);
+        assert_eq!(state(&out)["charger"]["plugged"], true);
+        h.step(h.now() + secs(21));
+        // The charger's 32 A at 230 V caps a 7.4 kW car at 7.36 kW.
+        assert!((h.charger().power - Kw::new(7.36)).value().abs() < 1e-9);
+        // energybrain's limit through Easee, and the app's temporary limit.
+        h.set_dynamic_current(Ampere::new(9.0), SignedDuration::from_mins(10));
+        assert_eq!(h.charger().dynamic, Some(Ampere::new(9.0)));
+        let out = h.on_message("sim/charger/set", b"12").unwrap();
+        assert_eq!(state(&out)["charger"]["dynamic"]["value"], 12.0);
+        let out = h.on_message("sim/charger/set", b"off").unwrap();
+        assert_eq!(state(&out)["charger"]["dynamic"], Value::Null);
+        assert_eq!(
+            h.on_message("sim/charger/set", b"-1"),
+            Err("-1 is negative".into())
+        );
         h.on_message("sim/ev/set", b"OFF").unwrap();
         let out = h.on_message("sim/load/set", b"2").unwrap();
         assert_eq!(state(&out)["loads"]["extra"]["value"], 2.0);
@@ -778,11 +816,11 @@ mod tests {
         h.on_message("sim/ev/set", b"7.4").unwrap();
         h.on_message("sim/zone/bathroom/setpoint/set", b"40")
             .unwrap();
-        h.step(h.now() + secs(1));
+        h.step(h.now() + secs(21));
         let line = h.summary();
         assert!(line.starts_with("Tue 16:00 "), "{line}");
         assert!(
-            line.contains(" + ev 7.40 + extra 0.00; heating: bathroom"),
+            line.contains(" + ev 7.36 + extra 0.00; heating: bathroom"),
             "{line}"
         );
         h.on_message("sim/meter/set", b"pause").unwrap();

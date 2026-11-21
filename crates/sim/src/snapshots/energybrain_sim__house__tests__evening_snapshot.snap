@@ -1,6 +1,6 @@
 ---
 source: crates/sim/src/house.rs
-assertion_line: 781
+assertion_line: 913
 expression: summary
 ---
 2026-12-01T15:10:00Z  4.005 kW  ev 0.0  appliances []  heating ["guest_1", "guest_2"]
@@ -8,10 +8,10 @@ expression: summary
 2026-12-01T15:30:00Z  3.862 kW  ev 0.0  appliances []  heating ["guest_1", "guest_2"]
 2026-12-01T15:40:00Z  3.076 kW  ev 0.0  appliances []  heating ["bathroom"]
 2026-12-01T15:50:00Z  4.642 kW  ev 0.0  appliances []  heating ["bathroom", "laundry", "basement"]
-2026-12-01T16:00:00Z 13.278 kW  ev 7.4  appliances []  heating ["bathroom", "laundry", "hallway", "basement"]
-2026-12-01T16:10:00Z 13.497 kW  ev 7.4  appliances []  heating ["bathroom", "laundry", "hallway", "basement"]
-2026-12-01T16:20:00Z 13.508 kW  ev 7.4  appliances []  heating ["bathroom", "laundry", "hallway", "basement"]
-2026-12-01T16:30:00Z 13.499 kW  ev 7.4  appliances []  heating ["bathroom", "laundry", "hallway", "basement"]
-2026-12-01T16:40:00Z 14.545 kW  ev 7.4  appliances []  heating ["laundry", "hallway", "guest_1", "guest_2", "basement"]
+2026-12-01T16:00:00Z  5.878 kW  ev 0.0  appliances []  heating ["bathroom", "laundry", "hallway", "basement"]
+2026-12-01T16:10:00Z 13.457 kW  ev 7.36  appliances []  heating ["bathroom", "laundry", "hallway", "basement"]
+2026-12-01T16:20:00Z 13.468 kW  ev 7.36  appliances []  heating ["bathroom", "laundry", "hallway", "basement"]
+2026-12-01T16:30:00Z 13.459 kW  ev 7.36  appliances []  heating ["bathroom", "laundry", "hallway", "basement"]
+2026-12-01T16:40:00Z 14.505 kW  ev 7.36  appliances []  heating ["laundry", "hallway", "guest_1", "guest_2", "basement"]
 2026-12-01T16:50:00Z  5.969 kW  ev 0.0  appliances []  heating ["laundry", "hallway", "guest_1", "guest_2"]
 2026-12-01T17:00:00Z  6.214 kW  ev 0.0  appliances []  heating ["laundry", "hallway", "guest_1", "guest_2"]

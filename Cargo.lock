@@ -690,9 +690,11 @@ dependencies = [
 name = "energybrain-sim"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "energybrain",
  "energybrain-config",
  "energybrain-core",
+ "energybrain-easee",
  "energybrain-han",
  "energybrain-mqtt",
  "energybrain-store",

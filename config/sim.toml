@@ -16,6 +16,10 @@ outdoor_c = -5.0
 indoor_c = 20.0
 # The meter's cumulative import register at the start.
 register_kwh = 10000
+# The charger's limit set in the Easee app ("Charger limit"), in amps: the ceiling of what
+# the car is offered (230 V per amp, one phase). energybrain limits it further through the
+# simulator's fake Easee.
+charger_limit_a = 16
 
 # Everything except floors, heat pump, appliances and EV, by local hour (0–23).
 [background]
@@ -60,8 +64,10 @@ per_day = 0.7
 from_hour = 8
 to_hour = 21
 
-# Daily EV charging. At 7.4 kW the hour can't stay under 5 kWh whatever is shed, so
-# energybrain reports the limit as unreachable. Start a session by hand: sim/ev/set 7.4.
+# Daily EV charging: the car plugs in at `from` and takes up to `kw` (capped by the charger)
+# until `kwh` are charged. energybrain steps it down before shedding floors. Plug a car in by
+# hand with sim/ev/set 7.4 (off unplugs), or set the app's temporary limit with
+# sim/charger/set 10 (off clears it): energybrain then leaves the charger alone.
 [[ev]]
 from = "22:00"
 kwh = 15

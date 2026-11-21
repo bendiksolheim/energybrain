@@ -1,5 +1,6 @@
-//! The async shell around [`House`]: energybrain's own MQTT transport in and out, and a
-//! real-time interval that steps the house to the shared clock's `now`.
+//! The async shell around [`House`]: energybrain's own MQTT transport in and out, the fake
+//! Easee's requests, and a real-time interval that steps the house to the shared clock's
+//! `now`.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -11,11 +12,13 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::Publish;
+use crate::easee::{self, Request};
 use crate::house::{House, STATE_TOPIC};
 
 /// Runs `house` until `shutdown` completes. Every `every` (real time) the house is stepped
 /// to `clock.now()`; on every connect the thermostats' current values are published
-/// (retained). Each `sim/state` also logs [`House::summary`], so the house shows up next
+/// (retained). Requests from the fake Easee ([`crate::easee`]) are answered at
+/// `clock.now()`. Each `sim/state` also logs [`House::summary`], so the house shows up next
 /// to energybrain's log.
 ///
 /// While disconnected, the house keeps running but what it publishes is dropped: rumqttc
@@ -27,6 +30,7 @@ pub async fn run(
     publisher: Publisher,
     clock: Arc<dyn Clock>,
     every: Duration,
+    mut easee: mpsc::Receiver<Request>,
     shutdown: impl Future<Output = ()>,
 ) {
     // `Link::next` is not cancel-safe, so it runs in its own task, as in the app.
@@ -42,6 +46,11 @@ pub async fn run(
             () = &mut shutdown => break,
             _ = ticker.tick() => house.step(clock.now()),
             Some(event) = events.recv() => on_event(event, &mut house, &mut connected, clock.as_ref()),
+            Some(request) = easee.recv() => {
+                let out = house.step(clock.now());
+                answer(request, &mut house);
+                out
+            }
         };
         for p in out {
             if p.topic == STATE_TOPIC {
@@ -55,6 +64,20 @@ pub async fn run(
     }
     let _ = tokio::time::timeout(Duration::from_secs(2), publisher.disconnect()).await;
     link_task.abort();
+}
+
+/// Answers the fake Easee from the house as it is now.
+fn answer(request: Request, house: &mut House) {
+    match request {
+        Request::Read(reply) => {
+            // The HTTP handler may have given up (client timeout); nothing to do then.
+            let _ = reply.send(easee::observations(&house.charger()));
+        }
+        Request::Write { current, ttl } => {
+            info!(%current, ttl = ?ttl, "easee: dynamic current set");
+            house.set_dynamic_current(current, ttl);
+        }
+    }
 }
 
 fn on_event(
@@ -158,6 +181,17 @@ mod tests {
 
     /// The house wired to `port`, on a clock that a background task moves 1 s every 20 ms.
     fn start(port: u16) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+        start_with_easee(port).0
+    }
+
+    /// [`start`], plus the channel the fake Easee would send its requests on.
+    #[allow(clippy::type_complexity)]
+    fn start_with_easee(
+        port: u16,
+    ) -> (
+        (oneshot::Sender<()>, tokio::task::JoinHandle<()>),
+        mpsc::Sender<Request>,
+    ) {
         let sim = crate::parse(MINIMAL, &eb()).unwrap();
         let clock = Arc::new(SimClock::new(sim.start));
         let mover = clock.clone();
@@ -174,17 +208,19 @@ mod tests {
             Duration::from_millis(50),
         );
         let (stop, stopped) = oneshot::channel();
+        let (requests, easee) = mpsc::channel(4);
         let task = tokio::spawn(run(
             house,
             link,
             publisher,
             clock,
             Duration::from_millis(10),
+            easee,
             async {
                 let _ = stopped.await;
             },
         ));
-        (stop, task)
+        ((stop, task), requests)
     }
 
     /// Waits for a message on `topic` whose payload satisfies `want`.
@@ -241,7 +277,7 @@ mod tests {
         observer.publish(&text("sim/ev/set", "fast")).await.unwrap();
         observer.publish(&text("sim/ev/set", "7.4")).await.unwrap();
         expect(&mut seen, STATE_TOPIC, |p| {
-            serde_json::from_slice::<serde_json::Value>(p).unwrap()["loads"]["ev"]["value"] == 7.4
+            serde_json::from_slice::<serde_json::Value>(p).unwrap()["charger"]["plugged"] == true
         })
         .await;
 
@@ -256,6 +292,46 @@ mod tests {
     async fn without_a_broker_it_keeps_retrying_until_stopped() {
         let (stop, task) = start(free_port());
         tokio::time::sleep(Duration::from_millis(300)).await;
+        stop.send(()).unwrap();
+        timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn answers_the_fake_easee_from_the_house() {
+        let ((stop, task), requests) = start_with_easee(free_port());
+        let read = || async {
+            let (reply, answer) = oneshot::channel();
+            requests.send(Request::Read(reply)).await.unwrap();
+            answer.await.unwrap()
+        };
+        let observations = read().await;
+        assert_eq!(
+            observations["observations"][0]["value"], 1,
+            "no car plugged in"
+        );
+        requests
+            .send(Request::Write {
+                current: energybrain_core::units::Ampere::new(9.0),
+                ttl: SignedDuration::from_mins(10),
+            })
+            .await
+            .unwrap();
+        let limited = read().await;
+        assert!(
+            limited["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|o| o["id"] == 48 && o["value"] == 9.0),
+            "{limited}"
+        );
+        // A poll whose HTTP side gave up is answered into the void.
+        let (reply, answer) = oneshot::channel();
+        drop(answer);
+        requests.send(Request::Read(reply)).await.unwrap();
         stop.send(()).unwrap();
         timeout(Duration::from_secs(5), task)
             .await

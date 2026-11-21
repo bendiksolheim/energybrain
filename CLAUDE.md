@@ -258,3 +258,8 @@ keep it up to date if a decision changes.
   instance's lines separately, so a branch taken by only one test's instance shows as missed.
   The Easee `Link` is built in `main.rs` (creating the reqwest client is fallible, and main is
   outside the coverage gate) and passed in `Runtime::charger`.
+- E5: the simulator serves a fake Easee (axum) on a free port; `main` overrides `[ev] api_url`
+  from `config/dev.toml` with it and scales the link's timing to simulated time. HTTP
+  requests reach the house through the driver's `select!` (request + oneshot reply), so
+  `House` stays pure. `config/dev.toml` now has an `[ev]` section (dummy credentials), so the
+  dev-config test compares topics field by field instead of `dev.topics == real.topics`.

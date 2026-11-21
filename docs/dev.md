@@ -95,7 +95,8 @@ minute long. Above about 60×, MQTT's real round trip starts to show in simulate
 
 | Command | Effect |
 |---|---|
-| `just sim ev 7.4` | the car charges at 7.4 kW until `just sim ev off` |
+| `just sim ev 7.4` | a car that takes up to 7.4 kW plugs in (`just sim ev off` unplugs it) |
+| `just sim charger 10` | the Easee app's temporary limit of 10 A (`just sim charger off` clears it) |
 | `just sim load 2.5` | 2.5 kW of extra load (sauna, heater, …); `just sim load 0` removes it |
 | `just sim meter pause` | the meter goes silent (`resume` brings it back) |
 | `just sim outdoor -20` | outdoor temperature: more heat pump, floors lose heat faster |
@@ -109,9 +110,18 @@ control topics.
 - **The evening peak.** With the defaults, dinner (16–19, oven and kettle at random) and
   the floors push the hour past 5 kWh. Watch `bathroom` get lowered first, then `laundry`,
   and the floors come back one at a time once the hour has room.
-- **An unreachable limit.** `just sim ev 7.4`: shedding every floor still can't keep the
-  hour under the limit. energybrain reports `limit_unreachable` once. The daily session at
-  22:00 in `sim.toml` does the same.
+- **The EV charger.** `just sim ev 7.4`: the car plugs in and, 20 s later, draws what the
+  charger offers (the app's 16 A limit in `sim.toml`, 3.7 kW). energybrain polls it through
+  the simulator's fake Easee every 30 simulated seconds and lowers its current *before* any
+  floor (`charger_limit` events, `energybrain/ev/limited`). Only if 6 A plus the floors is
+  still too much is a floor lowered too. The daily session at 22:00 in `sim.toml` does the same.
+- **The app's temporary limit.** While the charger is limited, `just sim charger 12`:
+  energybrain sees a limit it didn't write, logs a `charger_override` and leaves the charger
+  alone for `override_minutes`, shedding floors instead.
+- **An unreachable limit.** Set `charger_limit_a = 32` in `sim.toml`, or switch charger
+  limiting off (`just dev-pub energybrain/ev/shed_allowed/set 0`), with `just sim ev 7.4`:
+  shedding every floor can't keep the hour under the limit, and energybrain reports
+  `limit_unreachable` once.
 - **A stale meter.** `just sim meter pause` while floors are lowered. After
   `stale_after_secs`, about 20 s real, every floor is restored, one at a time, and
   `/healthz` turns 503. `just sim meter resume` brings the guard back.
@@ -138,6 +148,11 @@ control topics.
 - **The rest of the house.** Background use by hour of day with random noise, a heat pump
   that draws more the colder it is outside, appliances started at random within their
   hours, and EV sessions.
+- **The EV charger.** A car takes up to its own power, capped by what the charger offers
+  (the app limit, or a lower dynamic current) at 230 V per amp, nothing below 6 A, and follows
+  a change 20 s later. energybrain's limits expire after their TTL in simulated time. The
+  simulator serves a fake Easee API on a free local port and points `[ev] api_url` in
+  `config/dev.toml` at it, so energybrain's real Easee adapter runs unchanged.
 - **The meter.** Power every 2.5 s, details every 10 s, and the hourly register at hh:00:10
   holding the value from the hour shift, all in the Kaifa frame format.
 - **The thermostats.** Setpoint writes are echoed twice, power is reported on change and

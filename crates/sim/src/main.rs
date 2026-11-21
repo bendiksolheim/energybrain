@@ -8,8 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use energybrain::{Runtime, SystemClock, run, sqlite_events, sqlite_history};
+use energybrain_config::EaseeConfig;
 use energybrain_core::clock::{Clock, ScaledClock};
 use energybrain_core::io::Output;
+use energybrain_easee::{Link, Timing};
 use energybrain_sim::{House, driver};
 use energybrain_store::{SqliteStore, Store};
 use tokio::sync::watch;
@@ -50,6 +52,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (link, publisher) =
         energybrain_mqtt::connect(&house_mqtt, house.subscriptions(), Duration::from_secs(5));
 
+    // A fake Easee backed by the simulated charger, always on a free local port; with an
+    // [ev] section energybrain polls it on simulated time like the real cloud.
+    let (easee_tx, easee_rx) = tokio::sync::mpsc::channel(16);
+    let easee_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let easee_url = format!("http://{}", easee_listener.local_addr()?);
+    tokio::spawn(async move {
+        let _ = axum::serve(easee_listener, energybrain_sim::easee::router(easee_tx)).await;
+    });
+    let charger = config
+        .easee
+        .clone()
+        .map(|cfg| {
+            let timing = Timing {
+                poll_interval: clock.real(cfg.poll_interval.unsigned_abs()),
+                backoff_min: clock.real(Duration::from_secs(30)),
+                backoff_max: clock.real(Duration::from_secs(600)),
+            };
+            Link::with_timing(
+                EaseeConfig {
+                    api_url: easee_url.clone(),
+                    ..cfg
+                },
+                timing,
+            )
+        })
+        .transpose()?;
+    tracing::info!(url = %easee_url, enabled = charger.is_some(), "fake Easee");
+
     let (ctrl_c, stopped) = watch::channel(false);
     let mut house_stopped = stopped.clone();
     let mut eb_stopped = stopped;
@@ -62,6 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         publisher,
         clock.clone() as Arc<dyn Clock>,
         house_step,
+        easee_rx,
         async move {
             let _ = house_stopped.changed().await;
         },
@@ -83,8 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         history,
         listener,
         retry_delay: Duration::from_secs(5),
-        // The simulated charger's fake Easee arrives in E5 (PLAN.md §9).
-        charger: None,
+        charger,
     };
     run(runtime, async move {
         let _ = eb_stopped.changed().await;
