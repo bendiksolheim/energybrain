@@ -32,6 +32,10 @@ pub struct HourBar {
     pub end: i64,
     /// "17:00".
     pub label: String,
+    /// "17:00–18:00".
+    pub title: String,
+    /// "1.20 kWh of 4.70 kWh (estimated)": the hour at a glance.
+    pub summary: String,
     /// Whole-house energy.
     pub energy: Option<f64>,
     /// Estimated at the rollover, not yet measured.
@@ -168,31 +172,38 @@ fn flags(v: &[Option<bool>]) -> Vec<bool> {
     v.iter().map(|b| b.unwrap_or(false)).collect()
 }
 
-/// The page for `view`.
-pub fn day_page(site: &Site, view: &DayView) -> DayPage {
-    let clock = LocalClock::of(site.calendar.time_zone(), &view.hours.start);
-    let h = &view.hours;
-    let to = view.to.as_second();
-    let hours: Vec<HourBar> = h
-        .start
+/// One bar per local hour.
+fn hour_bars(clock: &LocalClock, h: &crate::history::HourColumns, to: i64) -> Vec<HourBar> {
+    h.start
         .iter()
         .enumerate()
         .map(|(i, start)| {
             let start = start.as_second();
             let energy = h.energy.values[i];
             let limit = h.limit.values[i];
+            let end = h.start.get(i + 1).map_or(to, |t| t.as_second());
+            let estimated = h.quality[i] == Some(Quality::Estimated);
             HourBar {
                 start,
-                end: h.start.get(i + 1).map_or(to, |t| t.as_second()),
+                end,
                 label: clock.hm(start),
+                title: clock.span(start, end),
+                summary: hour_summary(energy, limit, estimated),
                 energy,
-                estimated: h.quality[i] == Some(Quality::Estimated),
+                estimated,
                 allowed: h.allowed.values[i],
                 limit,
                 over: energy.zip(limit).is_some_and(|(e, l)| e > l),
             }
         })
-        .collect();
+        .collect()
+}
+
+/// The page for `view`.
+pub fn day_page(site: &Site, view: &DayView) -> DayPage {
+    let clock = LocalClock::of(site.calendar.time_zone(), &view.hours.start);
+    let to = view.to.as_second();
+    let hours = hour_bars(&clock, &view.hours, to);
     let s = &view.samples;
     let samples = Samples {
         at: s.at.iter().map(|t| t.as_second()).collect(),
@@ -269,6 +280,20 @@ pub fn day_page(site: &Site, view: &DayView) -> DayPage {
         zones,
         events,
     }
+}
+
+/// "1.20 kWh of 4.70 kWh (estimated)", "no data".
+fn hour_summary(energy: Option<f64>, limit: Option<f64>, estimated: bool) -> String {
+    let Some(e) = energy else {
+        return "no data".to_owned();
+    };
+    let of = limit.map(|l| format!(" of {}", qty(Some(l), 2, Kwh::UNIT)));
+    format!(
+        "{}{}{}",
+        qty(Some(e), 2, Kwh::UNIT),
+        of.unwrap_or_default(),
+        if estimated { " (estimated)" } else { "" }
+    )
 }
 
 /// `{"value": 4.7, "unit": "kWh"}` as text.

@@ -7,6 +7,7 @@
 
 pub mod api;
 pub mod app;
+mod chart;
 mod header;
 mod pages;
 #[cfg(feature = "ssr")]
@@ -20,9 +21,16 @@ pub use server::router;
 /// Gated on `wasm32` as well as `hydrate`: `cargo test --all-features` builds the server with
 /// `hydrate` too, and an effect created while the server renders would spawn a local task
 /// outside a `LocalSet` and panic.
-pub fn in_browser(f: impl Fn() + 'static) {
+pub fn in_browser(f: impl FnOnce() + 'static) {
     #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
-    leptos::prelude::Effect::new(move |_| f());
+    {
+        let mut f = Some(f);
+        leptos::prelude::Effect::new(move |_| {
+            if let Some(f) = f.take() {
+                f();
+            }
+        });
+    }
     #[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
     let _ = f;
 }

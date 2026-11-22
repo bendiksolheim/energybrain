@@ -49,9 +49,14 @@ impl LocalClock {
             .map_or(0, |&(_, offset)| offset)
     }
 
+    /// Seconds since local midnight.
+    pub fn of_day(&self, t: i64) -> i64 {
+        (t + i64::from(self.offset(t))).rem_euclid(86_400)
+    }
+
     /// `HH:MM` local time.
     pub fn hm(&self, t: i64) -> String {
-        let s = (t + i64::from(self.offset(t))).rem_euclid(86_400);
+        let s = self.of_day(t);
         format!("{:02}:{:02}", s / 3600, s % 3600 / 60)
     }
 

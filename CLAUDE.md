@@ -301,3 +301,12 @@ keep it up to date if a decision changes.
   runs through `energybrain_web::in_browser` / `cfg(all(feature = "hydrate", target_arch =
   "wasm32"))`: `--all-features` builds the server with `hydrate` too, and an effect created
   during server rendering panics (`spawn_local` outside a `LocalSet`).
+- W5–W6: `energybrain-view::chart` (pure, tested) holds all chart geometry: scales, nice
+  ticks (1/2/5 steps), DST-aware time ticks from the day's hour starts, line/step/area paths
+  with gaps, shaded runs, bars, nearest sample. Plots are SVGs with a 1000×1000 view box
+  stretched to their box; labels are HTML in percent. The day page zooms through
+  `?date=…&hour=N` links (plain anchors, so they work before hydration too); the cursor is a
+  page-wide signal shared by every minute chart, set by tapping. Pages refetch every minute
+  while today/this month is shown (`pages::refresh_every_minute`). Server functions are named
+  `load_*`: `#[server]` generates a struct named after the function, which clashed with the
+  view types (`DayPage`).

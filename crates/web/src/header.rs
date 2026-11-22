@@ -114,7 +114,7 @@ fn Budget(hour: HourBudget) -> impl IntoView {
 }
 
 #[component]
-fn TileView(tile: Tile) -> impl IntoView {
+pub fn TileView(tile: Tile) -> impl IntoView {
     view! {
         <div class=format!("tile {}", tone(tile.tone))>
             <div class="k">{tile.key}</div>
