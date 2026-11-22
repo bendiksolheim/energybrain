@@ -1,0 +1,21 @@
+---
+source: crates/view/src/day.rs
+assertion_line: 587
+expression: "rows.iter().map(text).collect::<Vec<_>>().join(\"\\n\")"
+---
+18:05 | Would shed | bathroom | projected 5.20 kWh, limit 4.70 kWh, load 1.40 kW
+18:05 | Released | bathroom | projection back below the limit
+18:05 | Would release | bathroom | meter stale
+18:05 | Released | bathroom | no longer sheddable (switched off or overridden)
+18:05 | Released | bathroom | guard turned off
+18:05 | Would limit EV to 10 A | EV | projected 5.10 kWh, limit 4.70 kWh, saves 0.90 kW
+18:05 | Limited EV to 10 A | EV | projected 5.10 kWh, limit 4.70 kWh, saves 0.90 kW
+18:05 | Would pause EV | EV | projected 5.10 kWh, limit 4.70 kWh, saves 0.90 kW
+18:05 | Paused EV | EV | projected 5.10 kWh, limit 4.70 kWh, saves 0.90 kW
+18:05 | Would release EV | EV | car unplugged
+18:05 | Released EV | EV | charger reading stale or offline
+18:05 | Limit unreachable | – | projected 7.00 kWh, limit 4.70 kWh, shedding saves 1.00 kWh
+18:05 | Override | bathroom | 24.0 °C until 20:05
+18:05 | Override ended | bathroom | 
+18:05 | Temporary limit | EV | 8 A from the app, guard leaves the charger alone until 20:05
+18:05 | Mode changed | – | observe → active

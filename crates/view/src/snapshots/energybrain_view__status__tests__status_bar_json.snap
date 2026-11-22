@@ -1,0 +1,89 @@
+---
+source: crates/view/src/status.rs
+assertion_line: 389
+expression: "serde_json::to_string_pretty(&bar).unwrap()"
+---
+{
+  "at": 1794763200,
+  "updated": "18:20",
+  "mode": "observe",
+  "hour": {
+    "label": "18:00–19:00",
+    "used": 1.2,
+    "projected": 5.2,
+    "limit": 4.7,
+    "text": "1.20 of 4.70 kWh",
+    "detail": "projected 5.20 kWh",
+    "tone": "warn"
+  },
+  "tiles": [
+    {
+      "key": "Mode",
+      "value": "observe",
+      "detail": null,
+      "tone": "normal"
+    },
+    {
+      "key": "Guard",
+      "value": "shedding",
+      "detail": null,
+      "tone": "warn"
+    },
+    {
+      "key": "Power",
+      "value": "6.00 kW",
+      "detail": null,
+      "tone": "normal"
+    },
+    {
+      "key": "EV",
+      "value": "2.30 kW",
+      "detail": "charging · 16 A offered · limit 10 A",
+      "tone": "warn"
+    },
+    {
+      "key": "Month",
+      "value": "3.40 kW top-3 average",
+      "detail": "tier 2–5 kW · 233 kr/month",
+      "tone": "normal"
+    }
+  ],
+  "zones": [
+    {
+      "id": "bathroom",
+      "name": "bathroom",
+      "state": "shed",
+      "setpoint": "22.5 °C",
+      "base": "base 26.5 °C",
+      "power": "1.40 kW",
+      "excluded": false
+    },
+    {
+      "id": "laundry",
+      "name": "laundry",
+      "state": "heating",
+      "setpoint": "26.5 °C",
+      "base": null,
+      "power": "0.60 kW",
+      "excluded": true
+    },
+    {
+      "id": "hallway",
+      "name": "hallway",
+      "state": "overridden",
+      "setpoint": "26.5 °C",
+      "base": null,
+      "power": "0.01 kW",
+      "excluded": false
+    },
+    {
+      "id": "basement",
+      "name": "basement",
+      "state": "idle",
+      "setpoint": "26.5 °C",
+      "base": null,
+      "power": "0.01 kW",
+      "excluded": false
+    }
+  ]
+}

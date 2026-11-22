@@ -1,0 +1,186 @@
+---
+source: crates/view/src/month.rs
+assertion_line: 236
+expression: "serde_json::to_string_pretty(&p).unwrap()"
+---
+{
+  "month": "2026-11",
+  "title": "November 2026",
+  "prev": "2026-10",
+  "next": "2026-12",
+  "is_current": true,
+  "tiles": [
+    {
+      "key": "Top-3 average",
+      "value": "4.03 kW",
+      "detail": "target 5 kW",
+      "tone": "normal"
+    },
+    {
+      "key": "Tier",
+      "value": "tier 2–5 kW · 233 kr/month",
+      "detail": null,
+      "tone": "normal"
+    },
+    {
+      "key": "Top day 1",
+      "value": "5.60 kWh",
+      "detail": "Mon 2, 17:00",
+      "tone": "warn"
+    },
+    {
+      "key": "Top day 2",
+      "value": "4.40 kWh",
+      "detail": "Sat 14, 18:00",
+      "tone": "normal"
+    },
+    {
+      "key": "Top day 3",
+      "value": "2.10 kWh",
+      "detail": "Tue 3, 07:00",
+      "tone": "normal"
+    }
+  ],
+  "target": 5.0,
+  "top_average": 4.033333333333333,
+  "days": [
+    {
+      "date": "2026-11-01",
+      "label": "Sun 1",
+      "peak": null,
+      "peak_at": "–",
+      "total": null,
+      "top": false
+    },
+    {
+      "date": "2026-11-02",
+      "label": "Mon 2",
+      "peak": 5.6,
+      "peak_at": "17:00",
+      "total": 8.6,
+      "top": true
+    },
+    {
+      "date": "2026-11-03",
+      "label": "Tue 3",
+      "peak": 2.1,
+      "peak_at": "07:00",
+      "total": 2.1,
+      "top": true
+    }
+  ],
+  "heat": [
+    {
+      "date": "2026-11-02",
+      "label": "Mon 2",
+      "cells": [
+        {
+          "level": null,
+          "text": "no data, Mon 2, 00:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 01:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 02:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 03:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 04:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 05:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 06:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 07:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 08:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 09:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 10:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 11:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 12:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 13:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 14:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 15:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 16:00"
+        },
+        {
+          "level": 6,
+          "text": "5.60 kWh, Mon 2, 17:00"
+        },
+        {
+          "level": 4,
+          "text": "3.00 kWh, Mon 2, 18:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 19:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 20:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 21:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 22:00"
+        },
+        {
+          "level": null,
+          "text": "no data, Mon 2, 23:00"
+        }
+      ]
+    }
+  ],
+  "legend": [
+    "< 1.0",
+    "1.0–2.0",
+    "2.0–3.0",
+    "3.0–4.0",
+    "4.0–5.0",
+    "5.0–6.0",
+    "≥ 6.0 kWh",
+    "Target: 5.0 kWh per hour."
+  ]
+}

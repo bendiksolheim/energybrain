@@ -275,3 +275,9 @@ keep it up to date if a decision changes.
 - W1: `energybrain-view` (pure, compiles to native and wasm32) holds the history views moved
   from `energybrain-http`; test data is `history::fixtures` behind `test-support`.
   `just check` runs `just wasm-check` (`cargo check --target wasm32-unknown-unknown`).
+- W2: presentation types in `energybrain-view` (`status::StatusBar`, `day::DayPage`,
+  `month::MonthPage`) are plain data (strings, `f64`, Unix seconds, own enums) with
+  `Serialize + Deserialize`, so core needs no `Deserialize` and no core type crosses to the
+  browser. Text is written on the server; the browser labels instants with
+  `fmt::LocalClock` (the UTC offset at each hour start), so it needs no tz database. Event
+  descriptions (`describe()` of `app.js`) moved to `day::event_row`.
