@@ -293,3 +293,11 @@ keep it up to date if a decision changes.
   and `CARGO_BUILD_JOBS=3` keep builds within the dev machine's 7 GB, which also runs the
   production stack. Verified in headless Chromium (`zenika/alpine-chrome`; the chromedp image
   never exits after `--dump-dom`).
+- W4: `GET /api/stream` (SSE, `energybrain-http`) sends a `status` event with
+  `StatusBar` JSON for every engine status; it ends when the status sender is dropped, which
+  `finish` does before stopping HTTP, so graceful shutdown doesn't wait on open streams. Uses
+  `futures-util` (already in the tree via axum) for `stream::unfold`. The header keeps the
+  streamed value in a signal (`EventSource` via `web-sys`, hydrate only). Browser-only code
+  runs through `energybrain_web::in_browser` / `cfg(all(feature = "hydrate", target_arch =
+  "wasm32"))`: `--all-features` builds the server with `hydrate` too, and an effect created
+  during server rendering panics (`spawn_local` outside a `LocalSet`).

@@ -16,6 +16,10 @@ leptos_router = "0.8.17"
 serde = { version = "1.0.229", features = ["derive"] }
 wasm-bindgen = "0.2.130"
 
+# Browser half (`hydrate`).
+serde_json = { version = "1.0.154", optional = true }
+web-sys = { version = "0.3.107", features = ["EventSource", "MessageEvent"], optional = true }
+
 # Server half (`ssr`).
 axum = { version = "0.8.9", optional = true }
 energybrain-http = { version = "0.1.0", path = "../http", optional = true }
@@ -23,7 +27,7 @@ leptos_axum = { version = "0.8.10", optional = true }
 tokio = { version = "1.54.1", features = ["rt"], optional = true }
 
 [features]
-hydrate = ["leptos/hydrate"]
+hydrate = ["leptos/hydrate", "dep:serde_json", "dep:web-sys"]
 ssr = [
   "leptos/ssr",
   "leptos_router/ssr",

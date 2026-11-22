@@ -15,6 +15,18 @@ mod server;
 #[cfg(feature = "ssr")]
 pub use server::router;
 
+/// Runs `f` once the page is live in the browser (an effect); never on the server.
+///
+/// Gated on `wasm32` as well as `hydrate`: `cargo test --all-features` builds the server with
+/// `hydrate` too, and an effect created while the server renders would spawn a local task
+/// outside a `LocalSet` and panic.
+pub fn in_browser(f: impl Fn() + 'static) {
+    #[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
+    leptos::prelude::Effect::new(move |_| f());
+    #[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
+    let _ = f;
+}
+
 /// The browser's entry point, called by the script that loads the WASM.
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]

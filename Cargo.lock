@@ -907,6 +907,7 @@ dependencies = [
  "axum 0.8.9",
  "energybrain-core",
  "energybrain-view",
+ "futures-util",
  "insta",
  "jiff",
  "serde",
@@ -992,8 +993,10 @@ dependencies = [
  "leptos_axum",
  "leptos_router",
  "serde",
+ "serde_json",
  "tokio",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

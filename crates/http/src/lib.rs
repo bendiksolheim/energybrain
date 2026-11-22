@@ -1,4 +1,5 @@
-//! HTTP: the old history page at `/legacy` (until the web app replaces it), `/healthz`, `/metrics`, `/api/state`, `/api/events`, and the
+//! HTTP: the live status stream `/api/stream`, the old history page at `/legacy` (until the
+//! web app replaces it), `/healthz`, `/metrics`, `/api/state`, `/api/events`, and the
 //! history views `/api/day` and `/api/month` behind the page.
 //!
 //! The router only reads shared state that the runtime loop keeps up to date: the latest
@@ -8,6 +9,7 @@
 mod metrics;
 mod page;
 
+use std::convert::Infallible;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::Json;
@@ -15,11 +17,14 @@ use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use energybrain_core::clock::Clock;
 use energybrain_core::energy::Freshness;
 use energybrain_core::io::Status;
+use futures_util::Stream;
+use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use serde::Deserialize;
 use serde_json::json;
@@ -67,6 +72,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics))
         .route("/api/state", get(api_state))
+        .route("/api/stream", get(api_stream))
         .route("/api/events", get(api_events))
         .route("/api/day", get(api_day))
         .route("/api/month", get(api_month))
@@ -139,6 +145,41 @@ async fn api_state(State(st): State<AppState>) -> Response {
         )
             .into_response(),
     }
+}
+
+/// Server-sent events: one `status` event per engine status (the web app's header), as
+/// `energybrain_view::status::StatusBar` JSON.
+async fn api_stream(
+    State(st): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let tz = st.site.calendar.time_zone().clone();
+    Sse::new(status_events(st.status.clone(), tz)).keep_alive(KeepAlive::default())
+}
+
+/// The latest status at once, then each new one. Ends when the engine stops (the sender is
+/// dropped), so a graceful shutdown doesn't wait for open streams.
+fn status_events(
+    mut status: watch::Receiver<Option<Arc<Status>>>,
+    tz: TimeZone,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    status.mark_changed();
+    futures_util::stream::unfold(status, move |mut rx| {
+        let tz = tz.clone();
+        async move {
+            loop {
+                rx.changed().await.ok()?;
+                let bar = rx
+                    .borrow_and_update()
+                    .as_deref()
+                    .map(|s| energybrain_view::status::status_bar(s, &tz));
+                if let Some(bar) = bar {
+                    // Plain data: serializing it can't fail.
+                    let json = serde_json::to_string(&bar).unwrap_or_default();
+                    return Some((Ok(Event::default().event("status").data(json)), rx));
+                }
+            }
+        }
+    })
 }
 
 /// Query string of `/api/events`.
@@ -350,6 +391,38 @@ mod tests {
             (StatusCode::OK, "[]".to_owned())
         );
         assert_eq!(get(&r.state, "/api/day").await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_stream_sends_each_status_and_ends_with_the_engine() {
+        use futures_util::StreamExt;
+
+        let r = rig(no_events());
+        let res = router(r.state.clone())
+            .oneshot(Request::get("/api/stream").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.headers()[CONTENT_TYPE], "text/event-stream");
+        let mut body = res.into_body().into_data_stream();
+        let quiet = std::time::Duration::from_millis(50);
+        // No status yet: nothing is sent until the first one.
+        assert!(tokio::time::timeout(quiet, body.next()).await.is_err());
+        r.status.send(Some(Arc::new(status()))).unwrap();
+        let first = String::from_utf8(body.next().await.unwrap().unwrap().to_vec()).unwrap();
+        assert!(first.starts_with("event: status\ndata: {"), "{first}");
+        let json = first.trim_end().trim_start_matches("event: status\ndata: ");
+        let bar: energybrain_view::status::StatusBar = serde_json::from_str(json).unwrap();
+        assert_eq!(bar.mode, "observe");
+        // Clearing the status sends nothing; the next one does.
+        r.status.send(None).unwrap();
+        assert!(tokio::time::timeout(quiet, body.next()).await.is_err());
+        let mut s = status();
+        s.mode = energybrain_core::mode::Mode::Active;
+        r.status.send(Some(Arc::new(s))).unwrap();
+        let next = String::from_utf8(body.next().await.unwrap().unwrap().to_vec()).unwrap();
+        assert!(next.contains(r#""mode":"active""#), "{next}");
+        drop(r.status);
+        assert!(body.next().await.is_none());
     }
 
     #[tokio::test]

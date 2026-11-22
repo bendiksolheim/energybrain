@@ -4,6 +4,7 @@ use energybrain_view::status::{HourBudget, StatusBar, Tile, Tone, ZoneChip, Zone
 use leptos::prelude::*;
 
 use crate::api::latest_status;
+use crate::in_browser;
 
 /// CSS class for a tone.
 pub fn tone(t: Tone) -> &'static str {
@@ -17,10 +18,14 @@ pub fn tone(t: Tone) -> &'static str {
 #[component]
 pub fn Header() -> impl IntoView {
     let status = Resource::new(|| (), |()| latest_status());
+    // Pushed by `/api/stream` once the page runs in the browser; until then (and on the
+    // server) the header shows the status the page was rendered with.
+    let live = RwSignal::new(None::<StatusBar>);
+    in_browser(move || subscribe(live.write_only()));
     view! {
         <header class="top">
             <Suspense fallback=|| view! { <Brand status=None/><p class="empty">"Loading…"</p> }>
-                {move || status.get().map(|r| match r {
+                {move || live.get().map(|s| Ok(Some(s))).or_else(|| status.get()).map(|r| match r {
                     Ok(Some(s)) => view! { <Brand status=Some(s.clone())/><Status status=s/> }.into_any(),
                     Ok(None) => view! { <Brand status=None/><p class="empty">"No status from the engine yet."</p> }.into_any(),
                     Err(e) => view! { <Brand status=None/><p class="empty">"Status unavailable: " {e.to_string()}</p> }.into_any(),
@@ -29,6 +34,33 @@ pub fn Header() -> impl IntoView {
         </header>
     }
 }
+
+/// Feeds every status from `/api/stream` into `live`. `EventSource` reconnects by itself.
+#[cfg(all(feature = "hydrate", target_arch = "wasm32"))]
+fn subscribe(live: WriteSignal<Option<StatusBar>>) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+
+    let Ok(source) = web_sys::EventSource::new("/api/stream") else {
+        return;
+    };
+    let on_status =
+        Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+            if let Some(bar) = e
+                .data()
+                .as_string()
+                .and_then(|t| serde_json::from_str(&t).ok())
+            {
+                live.set(Some(bar));
+            }
+        });
+    let _ = source.add_event_listener_with_callback("status", on_status.as_ref().unchecked_ref());
+    // The header lives as long as the page: keep the listener (and the connection) for good.
+    on_status.forget();
+}
+
+#[cfg(not(all(feature = "hydrate", target_arch = "wasm32")))]
+fn subscribe(_: WriteSignal<Option<StatusBar>>) {}
 
 #[component]
 fn Brand(status: Option<StatusBar>) -> impl IntoView {
