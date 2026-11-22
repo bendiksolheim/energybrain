@@ -14,7 +14,10 @@ RUN curl -sSfLo /tmp/cargo-leptos.tar.gz \
 WORKDIR /src
 COPY . .
 # `cargo fetch --locked` fails if Cargo.lock is out of date (cargo-leptos has no --locked).
-RUN cargo fetch --locked \
+# `--build-arg JOBS=3` caps parallel compile jobs on machines short of memory.
+ARG JOBS=
+RUN if [ -n "$JOBS" ]; then export CARGO_BUILD_JOBS="$JOBS"; fi \
+ && cargo fetch --locked \
  && cargo leptos build --release \
  && install -D target/release/energybrain /out/energybrain \
  && cp -r target/site /out/site \

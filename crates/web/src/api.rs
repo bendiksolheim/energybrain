@@ -20,54 +20,16 @@ pub async fn latest_status() -> Result<Option<StatusBar>, ServerFnError> {
 /// A day (`YYYY-MM-DD`; today when empty).
 #[server(prefix = "/fn")]
 pub async fn load_day(date: Option<String>) -> Result<DayPage, ServerFnError> {
-    use energybrain_view::history::{Detail, day_range, day_view, parse_date};
-
-    let st = state()?;
-    let site = st.site.clone();
-    let today = site.calendar.local_date(st.clock.now());
-    let date = match date.filter(|d| !d.is_empty()) {
-        Some(d) => parse_date(&d).map_err(ServerFnError::new)?,
-        None => today,
-    };
-    let range = day_range(&site.calendar, date).map_err(ServerFnError::new)?;
-    let history = read(&st, range, Detail::Full).await?;
-    Ok(energybrain_view::day::day_page(
-        &site,
-        &day_view(&site, date, range, today, history),
-    ))
+    energybrain_http::day_page(&state()?, date.as_deref())
+        .await
+        .map_err(ServerFnError::new)
 }
 
 /// A month (`YYYY-MM`; this month when empty).
 #[server(prefix = "/fn")]
 pub async fn load_month(month: Option<String>) -> Result<MonthPage, ServerFnError> {
-    use energybrain_view::history::{Detail, month_range, month_view, parse_month};
-
-    let st = state()?;
-    let site = st.site.clone();
-    let today = site.calendar.local_date(st.clock.now());
-    let day = match month.filter(|m| !m.is_empty()) {
-        Some(m) => parse_month(&m).map_err(ServerFnError::new)?,
-        None => today,
-    };
-    let range = month_range(&site.calendar, day).map_err(ServerFnError::new)?;
-    let history = read(&st, range, Detail::Hours).await?;
-    Ok(energybrain_view::month::month_page(
-        &site,
-        &month_view(&site, day, range, today, &history),
-    ))
-}
-
-/// Reads the store on a blocking thread.
-#[cfg(feature = "ssr")]
-async fn read(
-    st: &energybrain_http::AppState,
-    (from, to): (jiff::Timestamp, jiff::Timestamp),
-    detail: energybrain_view::history::Detail,
-) -> Result<energybrain_view::history::History, ServerFnError> {
-    let query = st.history.clone();
-    tokio::task::spawn_blocking(move || query(from, to, detail))
+    energybrain_http::month_page(&state()?, month.as_deref())
         .await
-        .map_err(ServerFnError::new)?
         .map_err(ServerFnError::new)
 }
 

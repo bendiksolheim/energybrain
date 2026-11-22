@@ -219,7 +219,7 @@ keep it up to date if a decision changes.
   bounded request queue while connected, so a full queue would block the loop and Ctrl-C) and
   republishes every thermostat's retained values on each connect. Dev broker: anonymous mosquitto
   without persistence, recreated by every `just dev`.
-- History page (PLAN.md §8, replaces Grafana): `GET /` serves a static page + vendored
+- *(Superseded by the web app, W7.)* History page (PLAN.md §8, replaces Grafana): `GET /` served a static page + vendored
   **uPlot 1.6.32** (MIT, `crates/http/assets/`, checksum-verified against jsdelivr and unpkg),
   embedded with `include_str!`. Not a Rust dependency; JS is outside the coverage gate, so it
   only draws: day/month bounds, hour limits, gaps, floors total, peaks, tier and the heatmap
@@ -228,7 +228,7 @@ keep it up to date if a decision changes.
 - Store migration 2: `samples`/`zone_samples`, the first `PublishStatus` per minute (app clock
   time), pruned hourly after `store.sample_retention_days` (default 90). Sampling lives in
   `SqliteStore::apply`, not core. Hours, zone hours and events are still kept forever.
-- `/api/day` and `/api/month` are columnar (`{"unit", "values": [...]}` per series) with
+- *(Removed in W7.)* `/api/day` and `/api/month` were columnar (`{"unit", "values": [...]}` per series) with
   RFC 3339 timestamps. They read through `HistoryQuery` (one SQLite connection per request,
   like `/api/events`). `blocking()` is generic per handler, so each handler's panic path
   needs its own test.
@@ -310,3 +310,7 @@ keep it up to date if a decision changes.
   while today/this month is shown (`pages::refresh_every_minute`). Server functions are named
   `load_*`: `#[server]` generates a struct named after the function, which clashed with the
   view types (`DayPage`).
+- W7: cut-over. The old page (`crates/http/assets`, uPlot, `page.rs`, `/legacy`, `/assets/*`),
+  `/api/day` and `/api/month` are gone. Loading a day or month for a page
+  (`energybrain_http::day_page`/`month_page`: default today, date validation, blocking store
+  read) stays in the gated http crate; the server functions only call them.

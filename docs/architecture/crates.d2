@@ -14,12 +14,12 @@ config: "energybrain-config\njiff · serde · thiserror · toml" {class: io}
 core: "energybrain-core\njiff · serde · thiserror" {class: pure}
 easee: "energybrain-easee\njiff · reqwest · serde · serde_json · thiserror · tokio · tracing" {class: io}
 han: "energybrain-han\njiff · thiserror" {class: pure}
-http: "energybrain-http\naxum · jiff · serde · serde_json · thiserror · tokio" {class: io}
+http: "energybrain-http\naxum · futures-util · jiff · serde · serde_json · thiserror · tokio" {class: io}
 mqtt: "energybrain-mqtt\njiff · rumqttc · serde_json · thiserror · tokio" {class: io}
 sim: "energybrain-sim\naxum · jiff · serde · serde_json · thiserror · tokio · toml · tracing · tracing-subscriber" {class: dev}
 store: "energybrain-store\njiff · rusqlite · serde_json · thiserror" {class: io}
 view: "energybrain-view\njiff · serde · serde_json · thiserror" {class: io}
-web: "energybrain-web\naxum · leptos · leptos_axum · leptos_router · serde · tokio · wasm-bindgen" {class: io}
+web: "energybrain-web\naxum · leptos · leptos_axum · leptos_router · serde · serde_json · wasm-bindgen · web-sys" {class: io}
 
 app -> config
 app -> core

@@ -54,8 +54,7 @@ Open <http://127.0.0.1:8082/> for the web app, or `http://<dev machine>:8082/` f
 machine on the network (energybrain listens on all interfaces in `config/dev.toml`; the
 MQTT broker stays on localhost). It follows the simulated clock: "today"
 is the simulated day, and at 6× a minute sample arrives every 10 real seconds, so the minute
-graphs fill in while you watch. The old history page stays at `/legacy` until the web app
-has all of it (PLAN.md §10).
+graphs fill in while you watch.
 
 The web app is Rust on both sides (Leptos): `just dev` and `just run` first run `just site`
 (`cargo leptos build`), which builds the browser bundle into `target/site/pkg`. That needs

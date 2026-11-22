@@ -1,13 +1,7 @@
-//! HTTP: the live status stream `/api/stream`, the old history page at `/legacy` (until the
-//! web app replaces it), `/healthz`, `/metrics`, `/api/state`, `/api/events`, and the
-//! history views `/api/day` and `/api/month` behind the page.
-//!
-//! The router only reads shared state that the runtime loop keeps up to date: the latest
-//! [`Status`] (a `watch` channel), whether MQTT is connected, the [`Metrics`] counters, and
-//! functions that query the store.
+//! HTTP: `/healthz`, `/metrics`, `/api/state`, `/api/events` and the live status stream
+//! `/api/stream`. The web app (`energybrain-web`) adds its pages and server functions on top.
 
 mod metrics;
-mod page;
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -30,10 +24,10 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::watch;
 
+use energybrain_view::day::DayPage;
 use energybrain_view::history;
-pub use energybrain_view::history::{
-    DayView, Detail, History, HistoryQuery, MAX_DAY_EVENTS, MonthView, Site, day_view, month_view,
-};
+pub use energybrain_view::history::{Detail, History, HistoryQuery, MAX_DAY_EVENTS, Site};
+use energybrain_view::month::MonthPage;
 pub use metrics::Metrics;
 
 /// Looks up stored events (JSON), newest first: `(since, limit)`.
@@ -67,15 +61,11 @@ pub struct AppState {
 /// The HTTP routes.
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/legacy", get(page::index))
-        .route("/assets/{name}", get(page::asset))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics))
         .route("/api/state", get(api_state))
         .route("/api/stream", get(api_stream))
         .route("/api/events", get(api_events))
-        .route("/api/day", get(api_day))
-        .route("/api/month", get(api_month))
         .with_state(state)
 }
 
@@ -204,7 +194,7 @@ async fn api_events(State(st): State<AppState>, Query(q): Query<EventsQuery>) ->
     let query = st.events.clone();
     match blocking(move || query(since, limit)).await {
         Ok(events) => Json(events).into_response(),
-        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
 
@@ -217,56 +207,39 @@ async fn blocking<T: Send + 'static>(
         .unwrap_or_else(|e| Err(e.to_string()))
 }
 
-fn error(code: StatusCode, message: impl Into<String>) -> Response {
-    (code, Json(json!({ "error": message.into() }))).into_response()
-}
-
-/// Query string of `/api/day`.
-#[derive(Debug, Deserialize)]
-struct DayQuery {
-    date: Option<String>,
-}
-
-async fn api_day(State(st): State<AppState>, Query(q): Query<DayQuery>) -> Response {
+/// The day page for `date` (`YYYY-MM-DD`; today when absent or empty), read from the store.
+/// Errors are messages for the page: a bad date, or the store's failure.
+pub async fn day_page(st: &AppState, date: Option<&str>) -> Result<DayPage, String> {
     let site = st.site.clone();
     let today = site.calendar.local_date(st.clock.now());
-    let date = match q.date.as_deref().map(history::parse_date).transpose() {
-        Ok(date) => date.unwrap_or(today),
-        Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
+    let date = match date.filter(|d| !d.is_empty()) {
+        Some(d) => history::parse_date(d).map_err(|e| e.to_string())?,
+        None => today,
     };
-    let (from, to) = match history::day_range(&site.calendar, date) {
-        Ok(range) => range,
-        Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
-    };
+    let range = history::day_range(&site.calendar, date).map_err(|e| e.to_string())?;
     let query = st.history.clone();
-    match blocking(move || query(from, to, Detail::Full)).await {
-        Ok(h) => Json(day_view(&site, date, (from, to), today, h)).into_response(),
-        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
-    }
+    let found = blocking(move || query(range.0, range.1, Detail::Full)).await?;
+    let view = history::day_view(&site, date, range, today, found);
+    Ok(energybrain_view::day::day_page(&site, &view))
 }
 
-/// Query string of `/api/month`.
-#[derive(Debug, Deserialize)]
-struct MonthQuery {
-    month: Option<String>,
-}
-
-async fn api_month(State(st): State<AppState>, Query(q): Query<MonthQuery>) -> Response {
+/// The month page for `month` (`YYYY-MM`; this month when absent or empty).
+pub async fn month_page(st: &AppState, month: Option<&str>) -> Result<MonthPage, String> {
     let site = st.site.clone();
     let today = site.calendar.local_date(st.clock.now());
-    let day = match q.month.as_deref().map(history::parse_month).transpose() {
-        Ok(day) => day.unwrap_or(today),
-        Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
+    let day = match month.filter(|m| !m.is_empty()) {
+        Some(m) => history::parse_month(m).map_err(|e| e.to_string())?,
+        None => today,
     };
-    let (from, to) = match history::month_range(&site.calendar, day) {
-        Ok(range) => range,
-        Err(e) => return error(StatusCode::BAD_REQUEST, e.to_string()),
-    };
+    let range = history::month_range(&site.calendar, day).map_err(|e| e.to_string())?;
     let query = st.history.clone();
-    match blocking(move || query(from, to, Detail::Hours)).await {
-        Ok(h) => Json(month_view(&site, day, (from, to), today, &h)).into_response(),
-        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
-    }
+    let found = blocking(move || query(range.0, range.1, Detail::Hours)).await?;
+    let view = history::month_view(&site, day, range, today, &found);
+    Ok(energybrain_view::month::month_page(&site, &view))
+}
+
+fn error(code: StatusCode, message: &str) -> Response {
+    (code, Json(json!({ "error": message }))).into_response()
 }
 
 #[cfg(test)]
@@ -390,7 +363,8 @@ mod tests {
             get(&r.state, "/api/events").await,
             (StatusCode::OK, "[]".to_owned())
         );
-        assert_eq!(get(&r.state, "/api/day").await.0, StatusCode::OK);
+        // The default rig has an empty history: today renders with no samples.
+        assert_eq!(day_page(&r.state, None).await.unwrap().samples.at.len(), 0);
     }
 
     #[tokio::test]
@@ -510,26 +484,22 @@ mod tests {
         (query, calls)
     }
 
-    fn body(text: &str) -> serde_json::Value {
-        serde_json::from_str(text).unwrap()
-    }
-
     #[tokio::test]
     async fn day_defaults_to_today_and_reads_the_whole_local_day() {
         let (query, calls) = recording(history::fixtures::day_history());
         let r = rig_with(no_events(), query);
-        let (code, text) = get(&r.state, "/api/day").await;
-        assert_eq!(code, StatusCode::OK);
-        let v = body(&text);
-        assert_eq!(v["date"], "2026-11-15");
-        assert_eq!(v["today"], "2026-11-15");
-        assert_eq!(v["time_zone"], "Europe/Oslo");
-        assert_eq!(v["samples"]["power"]["unit"], "kW");
-        let (code, text) = get(&r.state, "/api/day?date=2026-10-25").await;
-        assert_eq!(code, StatusCode::OK);
-        assert_eq!(body(&text)["hours"]["start"].as_array().unwrap().len(), 25);
+        let day = day_page(&r.state, None).await.unwrap();
+        assert_eq!((day.date.as_str(), day.is_today), ("2026-11-15", true));
+        assert_eq!(day.time_zone, "Europe/Oslo");
+        assert_eq!(day.samples.at.len(), 5);
+        let fall_back = day_page(&r.state, Some("2026-10-25")).await.unwrap();
+        assert_eq!(fall_back.hours.len(), 25);
         assert_eq!(
-            *calls.lock().unwrap(),
+            day_page(&r.state, Some("")).await.unwrap().date,
+            "2026-11-15"
+        );
+        assert_eq!(
+            calls.lock().unwrap()[..2],
             [
                 (
                     ts("2026-11-14T23:00:00Z"),
@@ -549,17 +519,16 @@ mod tests {
     async fn month_defaults_to_this_month_and_reads_hours_only() {
         let (query, calls) = recording(History::default());
         let r = rig_with(no_events(), query);
-        let (code, text) = get(&r.state, "/api/month").await;
-        assert_eq!(code, StatusCode::OK);
-        let v = body(&text);
-        assert_eq!(v["month"], "2026-11");
-        assert_eq!(v["days"]["date"].as_array().unwrap().len(), 30);
-        assert_eq!(v["tier"]["index"], 0);
-        let (code, text) = get(&r.state, "/api/month?month=2026-02").await;
-        assert_eq!(code, StatusCode::OK);
-        assert_eq!(body(&text)["days"]["date"].as_array().unwrap().len(), 28);
+        let month = month_page(&r.state, None).await.unwrap();
+        assert_eq!((month.month.as_str(), month.days.len()), ("2026-11", 30));
+        let feb = month_page(&r.state, Some("2026-02")).await.unwrap();
+        assert_eq!(feb.days.len(), 28);
         assert_eq!(
-            *calls.lock().unwrap(),
+            month_page(&r.state, Some("")).await.unwrap().month,
+            "2026-11"
+        );
+        assert_eq!(
+            calls.lock().unwrap()[..2],
             [
                 (
                     ts("2026-10-31T23:00:00Z"),
@@ -579,72 +548,35 @@ mod tests {
     async fn bad_dates_are_rejected_before_reading_the_store() {
         let (query, calls) = recording(History::default());
         let r = rig_with(no_events(), query);
-        for uri in [
-            "/api/day?date=yesterday",
-            "/api/day?date=9999-12-31",
-            "/api/month?month=2026-13",
-            "/api/month?month=9999-12",
-        ] {
-            let (code, text) = get(&r.state, uri).await;
-            assert_eq!(code, StatusCode::BAD_REQUEST, "{uri}");
-            assert!(body(&text)["error"].is_string(), "{uri}: {text}");
+        for date in ["yesterday", "9999-12-31"] {
+            assert!(day_page(&r.state, Some(date)).await.is_err(), "{date}");
+        }
+        for month in ["2026-13", "9999-12"] {
+            assert!(month_page(&r.state, Some(month)).await.is_err(), "{month}");
         }
         assert_eq!(calls.lock().unwrap().len(), 0);
     }
 
     #[tokio::test]
-    async fn history_lookup_failures_are_server_errors() {
+    async fn history_lookup_failures_are_errors() {
         let failing: HistoryQuery = Arc::new(|_, _, _| Err("disk full".to_owned()));
         let r = rig_with(no_events(), failing);
-        for uri in ["/api/day", "/api/month"] {
-            assert_eq!(
-                get(&r.state, uri).await,
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    r#"{"error":"disk full"}"#.to_owned()
-                )
-            );
-        }
+        assert_eq!(day_page(&r.state, None).await.unwrap_err(), "disk full");
+        assert_eq!(month_page(&r.state, None).await.unwrap_err(), "disk full");
         let panicking: HistoryQuery = Arc::new(|_, _, _| panic!("boom"));
         let r = rig_with(no_events(), panicking);
-        // `blocking` is instantiated per handler, so each needs its panic path run.
-        for uri in ["/api/day", "/api/month"] {
-            let (code, text) = get(&r.state, uri).await;
-            assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
-            assert!(text.contains("panicked"), "{text}");
-        }
-    }
-
-    #[tokio::test]
-    async fn the_page_and_its_assets_are_served() {
-        let r = rig(no_events());
-        let res = router(r.state.clone())
-            .oneshot(Request::get("/legacy").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(res.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
-        let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("<title>energybrain history</title>"));
-        for (uri, content_type) in [
-            ("/assets/app.js", "text/javascript; charset=utf-8"),
-            ("/assets/uplot.min.css", "text/css; charset=utf-8"),
-            ("/assets/uplot-LICENSE", "text/plain; charset=utf-8"),
-        ] {
-            let res = router(r.state.clone())
-                .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+        // `blocking` is instantiated per caller, so each needs its panic path run.
+        assert!(
+            day_page(&r.state, None)
                 .await
-                .unwrap();
-            assert_eq!(res.status(), StatusCode::OK, "{uri}");
-            assert_eq!(res.headers()[CONTENT_TYPE], content_type, "{uri}");
-            assert_eq!(res.headers()[axum::http::header::CACHE_CONTROL], "no-cache");
-        }
-        assert_eq!(
-            get(&r.state, "/assets/secret.toml").await,
-            (
-                StatusCode::NOT_FOUND,
-                r#"{"error":"no asset \"secret.toml\""}"#.to_owned()
-            )
+                .unwrap_err()
+                .contains("panicked")
+        );
+        assert!(
+            month_page(&r.state, None)
+                .await
+                .unwrap_err()
+                .contains("panicked")
         );
     }
 }

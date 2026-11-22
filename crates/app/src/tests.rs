@@ -301,15 +301,14 @@ async fn end_to_end_shed_report_and_restore_on_shutdown() {
     assert!(health.starts_with("HTTP/1.1 200"), "{health}");
     let events = http_get(http_port, "/api/events").await;
     assert!(events.contains(r#""type":"shed""#), "{events}");
-    // The clock stands still, so the sample log holds the first status only.
-    let day = http_get(http_port, "/api/day").await;
+    // The web app's pages render from the store. The clock stands still, so the sample log
+    // holds the first status only (17:30Z, embedded in the page's resolved data).
+    let day = http_get(http_port, "/").await;
     assert!(day.starts_with("HTTP/1.1 200"), "{day}");
-    assert!(
-        day.contains(r#""at":["2026-11-15T17:30:00Z"],"mode":["observe"]"#),
-        "{day}"
-    );
-    let month = http_get(http_port, "/api/month").await;
-    assert!(month.contains(r#""month":"2026-11""#), "{month}");
+    assert!(day.contains("Sunday 15 November 2026"), "{day}");
+    assert!(day.contains("[1794763800]"), "{day}");
+    let month = http_get(http_port, "/month").await;
+    assert!(month.contains("November 2026"), "{month}");
     let metrics = http_get(http_port, "/metrics").await;
     assert!(
         metrics.contains("energybrain_zone_writes_total{zone=\"bathroom\"} 1"),

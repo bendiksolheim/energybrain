@@ -707,6 +707,10 @@ the new crate, mosquitto in Apple containers for dev, no embedded broker in prod
 
 ## 8. History page (graphs instead of Grafana)
 
+> **Superseded by §10** (W7): the page is now the Leptos web app; `/api/day`, `/api/month`,
+> uPlot and `app.js` are gone. The sample log, the history computations (now in
+> `energybrain-view`) and the decisions about what to show still hold.
+
 Goal: see how usage and the guard's decisions played out over a day or a month, without
 running a metrics stack. `/api/state` only shows *now*, and the store only keeps hourly
 totals and events, so the minute-by-minute picture (power, the hour budget, setpoints,

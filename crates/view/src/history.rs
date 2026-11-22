@@ -103,7 +103,7 @@ impl Series {
     }
 }
 
-/// `/api/day`.
+/// One local day of history.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DayView {
     /// The local date shown.
@@ -233,7 +233,7 @@ pub struct ZoneColumns {
     pub overridden: Vec<Option<bool>>,
 }
 
-/// `/api/month`.
+/// One local month of history.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MonthView {
     /// The month shown, `YYYY-MM`.
