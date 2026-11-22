@@ -13,6 +13,11 @@ check:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo test --workspace --all-features
     just cov
+    just wasm-check
+
+# The crates the browser runs must keep compiling for wasm32 (PLAN.md §10)
+wasm-check:
+    cargo check --target wasm32-unknown-unknown -p energybrain-view
 
 fmt:
     cargo fmt --all

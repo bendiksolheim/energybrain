@@ -1,4 +1,4 @@
-//! The history views behind `/api/day` and `/api/month`.
+//! The history views: a day and a month, computed from what the store returns.
 //!
 //! The store hands over plain data ([`History`]). Everything the graphs need is worked out
 //! here, under the coverage gate, so the page only draws: local day and month boundaries
@@ -579,24 +579,28 @@ pub fn month_view(
     }
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+/// Shared test data, also for downstream crates' tests (`test-support`).
+#[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::unwrap_used, clippy::missing_panics_doc)]
+pub mod fixtures {
     use energybrain_core::tariff::Step;
     use energybrain_core::units::Kr;
-    use jiff::civil::date;
     use jiff::tz::TimeZone;
 
-    use super::*;
+    use super::{
+        CapacityTariff, Celsius, GuardStatus, History, HourEnergy, HourStart, Kw, Kwh,
+        LocalCalendar, Mode, Quality, Sample, Site, Timestamp, ZoneId, ZoneSample,
+    };
 
-    pub(crate) fn ts(s: &str) -> Timestamp {
+    pub fn ts(s: &str) -> Timestamp {
         s.parse().unwrap()
     }
 
-    fn id(s: &str) -> ZoneId {
+    pub fn id(s: &str) -> ZoneId {
         ZoneId::new(s).unwrap()
     }
 
-    pub(crate) fn site() -> Site {
+    pub fn site() -> Site {
         let step = |to, price| Step {
             to: Kw::new(to),
             price: Kr::new(price),
@@ -616,7 +620,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn hour(at: &str, kwh: f64, quality: Quality) -> HourEnergy {
+    pub fn hour(at: &str, kwh: f64, quality: Quality) -> HourEnergy {
         HourEnergy {
             hour: HourStart::containing(ts(at)),
             kwh: Kwh::new(kwh),
@@ -624,7 +628,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn sample(at: &str, used: f64, shed: bool) -> Sample {
+    pub fn sample(at: &str, used: f64, shed: bool) -> Sample {
         Sample {
             at: ts(at),
             mode: Mode::Observe,
@@ -663,7 +667,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn day_history() -> History {
+    pub fn day_history() -> History {
         History {
             samples: vec![
                 sample("2026-11-15T16:58:00Z", 4.3, false),
@@ -698,6 +702,14 @@ pub(crate) mod tests {
                 .to_vec(),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use jiff::civil::date;
+
+    use super::fixtures::*;
+    use super::*;
 
     fn view_of_day(date: Date, history: History) -> DayView {
         let range = day_range(&site().calendar, date).unwrap();
@@ -956,7 +968,7 @@ pub(crate) mod tests {
     #[test]
     fn site_without_a_named_zone_reports_utc() {
         let mut s = site();
-        s.calendar = LocalCalendar::new(TimeZone::fixed(jiff::tz::offset(1)));
+        s.calendar = LocalCalendar::new(jiff::tz::TimeZone::fixed(jiff::tz::offset(1)));
         assert_eq!(s.time_zone(), "UTC");
     }
 }

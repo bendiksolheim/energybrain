@@ -16,8 +16,9 @@ easee: "energybrain-easee\njiff · reqwest · serde · serde_json · thiserror �
 han: "energybrain-han\njiff · thiserror" {class: pure}
 http: "energybrain-http\naxum · jiff · serde · serde_json · thiserror · tokio" {class: io}
 mqtt: "energybrain-mqtt\njiff · rumqttc · serde_json · thiserror · tokio" {class: io}
-sim: "energybrain-sim\njiff · serde · serde_json · thiserror · tokio · toml · tracing · tracing-subscriber" {class: dev}
+sim: "energybrain-sim\naxum · jiff · serde · serde_json · thiserror · tokio · toml · tracing · tracing-subscriber" {class: dev}
 store: "energybrain-store\njiff · rusqlite · serde_json · thiserror" {class: io}
+view: "energybrain-view\njiff · serde · serde_json · thiserror" {class: io}
 
 app -> config
 app -> core
@@ -30,13 +31,16 @@ easee -> config
 easee -> core
 han -> core
 http -> core
+http -> view
 mqtt -> config
 mqtt -> core
 mqtt -> han
 sim -> app
 sim -> config
 sim -> core
+sim -> easee
 sim -> han
 sim -> mqtt
 sim -> store
 store -> core
+view -> core

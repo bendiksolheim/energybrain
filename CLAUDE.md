@@ -267,3 +267,11 @@ keep it up to date if a decision changes.
   charger, one row per minute). `ev_overridden IS NULL` means "no charger configured", so old
   samples and charger-less setups read back as `charger: None`. The stacked floors + EV
   series is computed in `energybrain-http::history`, like `floors`.
+- Web app (PLAN.md §10, user decision): Leptos 0.8 SSR + hydration replaces the JS/uPlot
+  page; no hand-written JS and no JS libraries; read-only (no control, no auth); phone-first.
+  `energybrain-web` (components, server functions) is the **only crate outside the coverage
+  gate**: business and presentation logic live in gated crates. `/api/day` and `/api/month`
+  give way to server functions; `/api/state`, `/api/events`, `/healthz`, `/metrics` stay.
+- W1: `energybrain-view` (pure, compiles to native and wasm32) holds the history views moved
+  from `energybrain-http`; test data is `history::fixtures` behind `test-support`.
+  `just check` runs `just wasm-check` (`cargo check --target wasm32-unknown-unknown`).

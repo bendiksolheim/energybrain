@@ -661,6 +661,7 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
  "energybrain-core",
+ "energybrain-view",
  "insta",
  "jiff",
  "serde",
@@ -720,6 +721,18 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "energybrain-view"
+version = "0.1.0"
+dependencies = [
+ "energybrain-core",
+ "insta",
+ "jiff",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

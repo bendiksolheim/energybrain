@@ -1047,3 +1047,121 @@ override shaded), an EV tile in the header, and describes the charger events.
 **Go-live:** at least a week of observe mode with the car charging on several evenings.
 Check the would-limit events against reality, decide `pause_allowed` from E0, then enable
 the charger in Active.
+
+---
+
+## 10. Web app (Leptos, replaces the history page)
+
+Goal: one web app that is the visual interface to the house, written entirely in Rust.
+It replaces the hand-written JS + uPlot page of §8, which is untyped and untested. The app is
+**read-only**: it presents state and history and controls nothing (no auth needed while
+that holds). It is designed for phones first, and it must stay current: the status updates live,
+and today's charts refresh at least every minute. A visual model of the house (zones
+coloured by state) is the next step after this section; it will build on the same SVG approach.
+
+### Decisions
+- **Leptos 0.8** (0.8.23 when written), SSR + full hydration, served by `leptos_axum` from
+  the energybrain binary. Not 0.9: it was still at rc when this was written. Moving to it is
+  a separate, deliberate step later, like a toolchain bump. Not islands: most of the app will be
+  interactive.
+- **No JS of our own and no JS libraries.** The only JS is what `wasm-bindgen` and Leptos
+  generate to load and hydrate the WASM. uPlot and `app.js` are deleted at the end.
+- **Same binary, same runtime.** The engine, MQTT, SQLite, Easee and axum stay native. The
+  browser part is a separate build output (`target/site/pkg/energybrain.{js,wasm,css}`),
+  served as static files from a directory. That directory comes from the env var
+  `ENERGYBRAIN_SITE_ROOT` (default `target/site`, set to `/site` in the Docker image), read in
+  `main.rs`.
+- **Build:** `cargo-leptos` (dev tool, pinned in CI and the Dockerfile) builds the server
+  binary and the WASM (`wasm32-unknown-unknown`, added to `rust-toolchain.toml`). It
+  downloads the matching `wasm-bindgen` CLI and `wasm-opt` itself. Workspace metadata in the root
+  `Cargo.toml`: `bin-package = "energybrain"`, `lib-package = "energybrain-web"`, with
+  `[profile.wasm-release]` (`opt-level = "z"`, fat LTO) for the WASM.
+- **Crates:**
+  - `energybrain-view` (new, **pure, under the 100 % gate, compiles to native and wasm32**):
+    the history computation (moved from `energybrain-http::history`), the
+    *presentation types* the browser receives, and the chart geometry. The presentation types
+    use only plain data (`String`, `f64`, `bool`, `Vec`, `Option` and the crate's own small
+    enums), so core types never cross the wire and core needs no `Deserialize`. Times are
+    resolved to local time **on the server**: labels arrive preformatted, and the per-hour UTC
+    offsets are sent along so the client can label any instant inside the day without a tz
+    database. Chart geometry (scales, ticks, paths, bands, cursor index) is plain Rust
+    functions over the presentation types. They run in both SSR and the browser (zoom and
+    cursor), and are tested natively.
+  - `energybrain-web` (new, **outside the coverage gate**, the only such crate): Leptos
+    components, routes, server functions, and the `EventSource` hookup. Features `ssr`
+    (server: also depends on `energybrain-http`, `leptos_axum`, axum) and `hydrate`
+    (browser). It does as little as possible: it calls `energybrain-view` and puts the result into
+    markup. It still gets SSR smoke tests (render each page for a fixture without
+    panicking), linted for both targets.
+  - `energybrain-http` keeps `/healthz`, `/metrics`, `/api/state`, `/api/events` (used with
+    `curl` to review observe mode; small and tested) and gains `/api/stream`. `/api/day`,
+    `/api/month` and the static page go away once the Leptos pages replace them (server
+    functions instead).
+- **Data flow:** the pages load through Leptos server functions (`day_page(date)`,
+  `month_page(month)`, `status_bar()`), which read the store through the existing
+  `HistoryQuery` and return presentation types. **Live:** `GET /api/stream` is server-sent
+  events. Each time the engine publishes a status (every tick, 10 s), the server sends the
+  status bar's presentation type. It is built in `energybrain-view` and tested. The browser keeps it
+  in a signal, so the header changes without reloading. While today (or this month) is shown,
+  the page's data is refetched every 60 s. `EventSource` reconnects by itself.
+- **Charts:** hand-written SVG via `energybrain-view::chart`, no chart library. The plot area is
+  an SVG with `viewBox="0 0 1000 1000"` and `preserveAspectRatio="none"`, with
+  `vector-effect: non-scaling-stroke`. It stretches to any width without measuring the DOM,
+  and axis labels are HTML positioned in percent, so text never stretches. Interactions:
+  - tapping or moving over a chart sets the **shared cursor** (one signal per page): every
+    minute chart shows its readout at that time;
+  - tapping an hour bar or an event hour **zooms** every minute chart to that hour
+    (`?hour=HH` in the URL);
+  - a "whole day" button resets the zoom;
+  - tapping a day in the month view opens that day.
+
+  Drag-to-zoom is dropped.
+- **Phone-first layout:** single column, large tap targets. Readouts sit under the chart
+  instead of in hover tooltips. It widens to a grid on desktop.
+- **Coverage:** `just cov` adds `crates/web/` to `--ignore-filename-regex`. `just check`
+  also runs `cargo clippy -p energybrain-web --target wasm32-unknown-unknown --features
+  hydrate -- -D warnings`, and `cargo check --target wasm32-unknown-unknown -p
+  energybrain-view`, so the browser build can't silently break.
+- **Verification without a person:** `cargo leptos build`, then run energybrain against
+  the dev broker and simulator. A headless Chromium in a container loads each page, and I
+  check the hydrated DOM (`--dump-dom`) and screenshots at phone and desktop widths. This is
+  a manual dev check, not a test.
+
+### Milestones
+Each ends with `just check` green and a commit.
+
+**W1 — `energybrain-view`.** Move `history.rs` (and its snapshots) from `energybrain-http` to a
+new pure crate. `energybrain-http` depends on it, and `/api/day` and `/api/month` are unchanged.
+Add `wasm32-unknown-unknown` to `rust-toolchain.toml`. `just check` gains the wasm32 `cargo
+check` of `energybrain-view`.
+
+**W2 — Presentation types.** `fmt` (quantities, local times from offsets), `status`
+(`StatusBar` from `Status`: mode, guard, this hour, power, EV, month/tier), `day`
+(`DayPage` from `DayView`: hour bars, sample columns, zones, EV, events described in
+Rust — the `describe()` of `app.js` moves here), `month` (`MonthPage`: tiles, peak bars,
+heatmap bins and legend). Serde round-trip tests and insta snapshots.
+
+**W3 — `energybrain-web` skeleton.** Leptos 0.8 + cargo-leptos setup. App shell with
+header, Day/Month routes, phone-first CSS (`style/main.css`, built by cargo-leptos), and
+the status bar loaded by a server function. `energybrain::run` serves the Leptos routes
+merged with the HTTP router. The old page moves to `/legacy` until W7. Update
+`deploy/Dockerfile` (cargo-leptos, wasm target, `/site`), CI (wasm target, cargo-leptos
+build in the docker job), justfile (`just site`; `run` and `dev` build the site first;
+coverage exclusion; wasm clippy), docs. Check in headless Chromium that it hydrates.
+
+**W4 — Live status.** `/api/stream` (SSE from the status `watch`, tested in
+`energybrain-http`); `EventSource` → signal in the web app; per-minute refetch of live
+pages.
+
+**W5 — Chart kit + first charts.** `energybrain-view::chart`: linear and time scales,
+ticks from the day's hour starts, bar/line/step paths with gaps, bands, cursor index from
+an x fraction, zoom range. SVG components in the web app. Day page: energy per hour (tap →
+zoom) and power (house, floors, EV stacked) with the shared cursor and readouts.
+
+**W6 — Rest of the day page.** EV currents, hour budget with guard bands, one chart per
+zone with shed bands, events grouped by hour (tap → zoom).
+
+**W7 — Month page, then cut-over.** Tiles, day-peak bars (top 3, target, average), heatmap
+(tap → day). Then delete `/legacy`, `assets/`, uPlot, `/api/day` and `/api/month`. Update
+§8 as superseded, the architecture diagrams (`system.d2`, `crates.d2` via `just arch-render`),
+`docs/dev.md`, `docs/docker.md`, and the CLAUDE.md decision log.

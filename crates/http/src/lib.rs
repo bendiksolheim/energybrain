@@ -5,7 +5,6 @@
 //! [`Status`] (a `watch` channel), whether MQTT is connected, the [`Metrics`] counters, and
 //! functions that query the store.
 
-mod history;
 mod metrics;
 mod page;
 
@@ -26,7 +25,8 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::watch;
 
-pub use history::{
+use energybrain_view::history;
+pub use energybrain_view::history::{
     DayView, Detail, History, HistoryQuery, MAX_DAY_EVENTS, MonthView, Site, day_view, month_view,
 };
 pub use metrics::Metrics;
@@ -264,7 +264,7 @@ mod tests {
             metrics: Arc::new(Mutex::new(Metrics::default())),
             events,
             history,
-            site: Arc::new(history::tests::site()),
+            site: Arc::new(history::fixtures::site()),
             max_status_age: SignedDuration::from_secs(30),
         };
         Rig {
@@ -443,7 +443,7 @@ mod tests {
 
     #[tokio::test]
     async fn day_defaults_to_today_and_reads_the_whole_local_day() {
-        let (query, calls) = recording(history::tests::day_history());
+        let (query, calls) = recording(history::fixtures::day_history());
         let r = rig_with(no_events(), query);
         let (code, text) = get(&r.state, "/api/day").await;
         assert_eq!(code, StatusCode::OK);

@@ -41,6 +41,7 @@ eb: energybrain process {
   config: "energybrain-config\nTOML → Config" {class: io}
   store: "energybrain-store\nSQLite, own thread" {class: io}
   http: "energybrain-http\naxum: page, /api, /metrics" {class: io}
+  view: "energybrain-view\nhistory views, presentation\npure: native + wasm32" {class: pure}
 
   mqtt.translate -> han: HAN frame
   mqtt.translate -> loop: Input
@@ -52,6 +53,7 @@ eb: energybrain process {
   loop -> store: "Persist* (channel)"
   store -> loop: "PersistedState\nat startup" {style.stroke-dash: 3}
   loop -> http: "Status (watch)\nwrite counters"
+  http -> view: "History → views"
 }
 
 db: "SQLite /data\nhours · zones · events · samples" {shape: cylinder; class: external}

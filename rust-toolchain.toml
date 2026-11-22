@@ -1,3 +1,5 @@
 [toolchain]
 channel = "1.100.0"
 components = ["rustfmt", "clippy", "llvm-tools-preview", "rust-analyzer"]
+# The web app's browser half (PLAN.md §10).
+targets = ["wasm32-unknown-unknown"]
