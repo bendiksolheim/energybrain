@@ -103,11 +103,11 @@ a { color: var(--s1); }
 .budget .k { color: var(--ink-2); font-size: 13px; }
 .budget .v { font-weight: 650; font-size: 20px; font-variant-numeric: tabular-nums; }
 .budget .d { color: var(--muted); font-size: 13px; }
-.bar { position: relative; height: 12px; margin: 8px 0 6px; border-radius: 6px; background: var(--grid); }
-.bar .used { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: var(--s1); }
-.bar .projected, .bar .limit { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; }
-.bar .projected { background: var(--s2); }
-.bar .limit { background: var(--ink); }
+.meter { position: relative; height: 12px; margin: 8px 0 6px; border-radius: 6px; background: var(--grid); }
+.meter .used { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: var(--s1); }
+.meter .projected, .meter .limit { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; }
+.meter .projected { background: var(--s2); }
+.meter .limit { background: var(--ink); }
 .budget.warn .used { background: var(--warn); }
 .budget.alert .used { background: var(--alert); }
 

@@ -103,7 +103,7 @@ fn Budget(hour: HourBudget) -> impl IntoView {
                 <span class="k">"This hour · " {hour.label}</span>
                 <span class="v">{hour.text}</span>
             </div>
-            <div class="bar" role="img" aria-label="Energy used this hour against the limit">
+            <div class="meter" role="img" aria-label="Energy used this hour against the limit">
                 <div class="used" style:width=pct(hour.used)></div>
                 {hour.projected.map(|p| view! { <div class="projected" style:left=pct(p)></div> })}
                 <div class="limit" style:left=pct(hour.limit)></div>
