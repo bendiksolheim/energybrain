@@ -86,7 +86,7 @@ cloud API every 30 s and lowers its current *before* it lowers any floor (down t
 pause if allowed). Every limit expires by itself after 10 minutes unless renewed, so a stopped
 energybrain hands the charger back to the app. The app's "Charger limit" stays the ceiling, and
 a "Temporary charging limit" set in the app keeps energybrain away from the charger for two
-hours or until the car is unplugged. See [docs/easee.md](docs/easee.md) and PLAN.md §9.
+hours, until you clear it, or until the car is unplugged. See [docs/easee.md](docs/easee.md) and PLAN.md §9.
 
 ## MQTT topics
 

@@ -875,7 +875,8 @@ Only the cloud API exists (no local interface on the Charge Lite). Base URL
 - **Temporary limit set in the app = override.** The app's "Temporary charging limit"
   writes the same dynamic current we do. If observation 48 reports a value we didn't
   write, the user has set it: the charger is excluded from shedding for
-  `override_minutes` (default 120), or until the cable is unplugged, and the guard uses
+  `override_minutes` (default 120), until the cable is unplugged, or until the user clears
+  it (48 missing or back at 47: no temporary limit any more), and the guard uses
   floors only. This mirrors a thermostat override. Without it, the user setting 6 A would
   be overwritten by our 10 A, or their 15 A by our 6 A. A reboot or unplug clears 48 by
   itself, and that is not an override. How a cleared 48 reads wasn't checked (user skipped

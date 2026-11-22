@@ -243,7 +243,7 @@ keep it up to date if a decision changes.
   Easee's TTL'd dynamic current (`ChargerWrite { current, ttl }`; release = `max_current` for
   1 min; pause = 0 A, off by default). Power per amp is configured (230 V × phases), not
   learned. A dynamic current below the user's charger limit that isn't one of our last two
-  writes and isn't 0 is the user's temporary limit → override (2 h or until unplugged), never
+  writes and isn't 0 is the user's temporary limit → override (2 h, until unplugged, or until 48 is cleared or back at 47), never
   written over. The guard's car model: `draw = min(demand, current × V)`, where `demand` is the
   reported draw unless the car draws exactly what the limit allows (then the ceiling). Raises
   wait for `restore_stagger` like zone releases.

@@ -290,12 +290,17 @@ impl Charger {
             self.manual = None;
             return None;
         }
-        let d = reading.dynamic_current?;
         let ceiling = reading.max_current.unwrap_or(self.config.max_current);
+        let Some(d) = reading.dynamic_current.filter(|&d| d < ceiling) else {
+            // No temporary limit any more (cleared, or back at the charger limit): the user
+            // removed theirs, so the override ends.
+            self.manual = None;
+            return None;
+        };
         let ours = self.last_write.is_some_and(|w| same(w.current, d))
             || self.previous_write.is_some_and(|p| same(p, d));
         let known = self.manual.is_some_and(|m| same(m.current, d));
-        if d.value() < SAME_CURRENT || d >= ceiling || ours || known {
+        if d.value() < SAME_CURRENT || ours || known {
             return None;
         }
         let o = ChargerOverride {
@@ -650,7 +655,21 @@ pub(crate) mod tests {
         // Still the same limit after it expired: not a new override.
         assert_eq!(c.on_reading(with(Some(8.0), "2026-11-15T19:01:00Z")), None);
         assert!(c.active_override(ts("2026-11-15T19:01:00Z")).is_none());
+        // Clearing it in the app ends it, whether 48 disappears or reads the charger limit.
+        for cleared in [None, Some(15.0)] {
+            assert!(
+                c.on_reading(with(Some(7.0), "2026-11-15T19:01:10Z"))
+                    .is_some()
+            );
+            assert_eq!(c.on_reading(with(cleared, "2026-11-15T19:01:20Z")), None);
+            assert_eq!(c.manual, None, "{cleared:?}");
+            c.reading = None;
+        }
         // Unplugging ends it.
+        assert!(
+            c.on_reading(with(Some(8.0), "2026-11-15T19:01:30Z"))
+                .is_some()
+        );
         c.on_reading(reading(
             "2026-11-15T19:02:00Z",
             ChargerMode::Disconnected,
