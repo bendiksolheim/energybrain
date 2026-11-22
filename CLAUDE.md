@@ -281,3 +281,15 @@ keep it up to date if a decision changes.
   browser. Text is written on the server; the browser labels instants with
   `fmt::LocalClock` (the UTC offset at each hour start), so it needs no tz database. Event
   descriptions (`describe()` of `app.js`) moved to `day::event_row`.
+- W3: `energybrain-web` (Leptos 0.8.23, `leptos_router`, `leptos_axum`, `wasm-bindgen`; no
+  `leptos_meta`) with features `ssr`/`hydrate`; `energybrain_web::router` merges the Leptos
+  routes, server functions (`/fn/...`) and `/pkg` with `energybrain_http::router`. The old page
+  moved to `/legacy`. cargo-leptos **0.3.11** (release binary, checksum pinned in the
+  Dockerfile) builds `target/site`; `ENERGYBRAIN_SITE_ROOT` (default `target/site`, `/site` in
+  the image) tells the binary where it is. Workspace metadata sets `disable-erase-components`
+  (otherwise dev bundles don't hydrate pages from plain-`cargo` servers) and
+  `.cargo/config.toml` sets `LEPTOS_OUTPUT_NAME` (otherwise those servers ask for
+  `*_bg.wasm`). Routes use `SsrMode::Async`. `[profile.dev] debug = "line-tables-only"` (user)
+  and `CARGO_BUILD_JOBS=3` keep builds within the dev machine's 7 GB, which also runs the
+  production stack. Verified in headless Chromium (`zenika/alpine-chrome`; the chromedp image
+  never exits after `--dump-dom`).

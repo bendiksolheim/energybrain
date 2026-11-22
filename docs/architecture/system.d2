@@ -42,6 +42,7 @@ eb: energybrain process {
   store: "energybrain-store\nSQLite, own thread" {class: io}
   http: "energybrain-http\naxum: page, /api, /metrics" {class: io}
   view: "energybrain-view\nhistory views, presentation\npure: native + wasm32" {class: pure}
+  web: "energybrain-web\nLeptos: pages, server functions\n(server half)" {class: io}
 
   mqtt.translate -> han: HAN frame
   mqtt.translate -> loop: Input
@@ -54,10 +55,12 @@ eb: energybrain process {
   store -> loop: "PersistedState\nat startup" {style.stroke-dash: 3}
   loop -> http: "Status (watch)\nwrite counters"
   http -> view: "History → views"
+  web -> http: "routes, AppState"
+  web -> view: "server functions"
 }
 
 db: "SQLite /data\nhours · zones · events · samples" {shape: cylinder; class: external}
-browser: "Browser" {class: external}
+browser: "Browser\nenergybrain-web as WASM\n(hydrated pages)" {class: external}
 
 house.pulse -> broker: "tibber\nHDLC frames"
 house.ztrm <-> broker: "setpoint · power · kWh\n…/set writes"
@@ -66,6 +69,7 @@ sim <-> broker: "same device topics\n+ sim/…" {style.stroke-dash: 4}
 broker <-> eb.mqtt.transport
 eb.store -> db
 eb.http -> db: "history queries" {style.stroke-dash: 3}
-browser -> eb.http: HTTP
+browser -> eb.web: "HTML · /fn · /pkg"
+browser -> eb.http: "/api · /metrics"
 eb.easee <-> easee_cloud: "HTTPS: login,\nobservations, commands"
 easee_cloud <-> house.easee_charger

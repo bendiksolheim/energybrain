@@ -1,4 +1,4 @@
-//! HTTP: the history page at `/`, `/healthz`, `/metrics`, `/api/state`, `/api/events`, and the
+//! HTTP: the old history page at `/legacy` (until the web app replaces it), `/healthz`, `/metrics`, `/api/state`, `/api/events`, and the
 //! history views `/api/day` and `/api/month` behind the page.
 //!
 //! The router only reads shared state that the runtime loop keeps up to date: the latest
@@ -62,7 +62,7 @@ pub struct AppState {
 /// The HTTP routes.
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(page::index))
+        .route("/legacy", get(page::index))
         .route("/assets/{name}", get(page::asset))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics))
@@ -546,7 +546,7 @@ mod tests {
     async fn the_page_and_its_assets_are_served() {
         let r = rig(no_events());
         let res = router(r.state.clone())
-            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .oneshot(Request::get("/legacy").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);

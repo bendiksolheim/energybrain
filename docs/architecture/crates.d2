@@ -19,6 +19,7 @@ mqtt: "energybrain-mqtt\njiff · rumqttc · serde_json · thiserror · tokio" {c
 sim: "energybrain-sim\naxum · jiff · serde · serde_json · thiserror · tokio · toml · tracing · tracing-subscriber" {class: dev}
 store: "energybrain-store\njiff · rusqlite · serde_json · thiserror" {class: io}
 view: "energybrain-view\njiff · serde · serde_json · thiserror" {class: io}
+web: "energybrain-web\naxum · leptos · leptos_axum · leptos_router · serde · tokio · wasm-bindgen" {class: io}
 
 app -> config
 app -> core
@@ -26,6 +27,7 @@ app -> easee
 app -> http
 app -> mqtt
 app -> store
+app -> web
 config -> core
 easee -> config
 easee -> core
@@ -44,3 +46,5 @@ sim -> mqtt
 sim -> store
 store -> core
 view -> core
+web -> http
+web -> view

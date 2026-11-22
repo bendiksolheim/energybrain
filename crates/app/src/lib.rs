@@ -16,7 +16,7 @@ use energybrain_core::clock::Clock;
 use energybrain_core::engine::Engine;
 use energybrain_core::io::{Input, Output, Status};
 use energybrain_http::{
-    AppState, Detail, EventQuery, History, HistoryQuery, MAX_DAY_EVENTS, Metrics, Site, router,
+    AppState, Detail, EventQuery, History, HistoryQuery, MAX_DAY_EVENTS, Metrics, Site,
 };
 use energybrain_mqtt::{Decoded, Link, Publisher, Translator, TransportEvent, connect};
 use energybrain_store::{SqliteStore, Store, StoreError};
@@ -119,6 +119,8 @@ pub struct Runtime {
     /// The EV charger's Easee link, if `[ev]` is configured (built by the caller, since
     /// creating its HTTP client can fail).
     pub charger: Option<energybrain_easee::Link>,
+    /// The web app's browser bundle (`pkg/`), built by `cargo leptos build`.
+    pub site_root: std::path::PathBuf,
 }
 
 /// Hours older than this are not loaded; the ledger only needs the current month.
@@ -148,6 +150,7 @@ async fn serve(
         tick,
         retry_delay,
         charger,
+        site_root,
     } = rt;
     let now = clock.now();
     let persisted = store.load(now - HISTORY)?;
@@ -161,17 +164,20 @@ async fn serve(
     let (status_tx, status_rx) = watch::channel(None);
     let (mqtt_tx, mqtt_rx) = watch::channel(false);
     let metrics = Arc::new(Mutex::new(Metrics::default()));
-    let app = router(AppState {
-        status: status_rx,
-        mqtt_connected: mqtt_rx,
-        clock: clock.clone(),
-        metrics: metrics.clone(),
-        events,
-        history,
-        site: Arc::new(site(&config)),
-        max_status_age: SignedDuration::from_secs(30)
-            .max(SignedDuration::try_from(tick * 3).unwrap_or_default()),
-    });
+    let app = energybrain_web::router(
+        AppState {
+            status: status_rx,
+            mqtt_connected: mqtt_rx,
+            clock: clock.clone(),
+            metrics: metrics.clone(),
+            events,
+            history,
+            site: Arc::new(site(&config)),
+            max_status_age: SignedDuration::from_secs(30)
+                .max(SignedDuration::try_from(tick * 3).unwrap_or_default()),
+        },
+        &site_root,
+    );
     let (http_stop, http_stopped) = oneshot::channel::<()>();
     let http = tokio::spawn(async move {
         // `serve` only returns once shutdown is requested; accept errors are retried inside.

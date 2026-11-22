@@ -25,3 +25,31 @@ expect_used = "warn"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# The browser half of the web app (PLAN.md §10): small over fast.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+panic = "abort"
+
+[profile.dev]
+debug = "line-tables-only"
+
+# `cargo leptos build` builds the server binary and the browser bundle (target/site).
+[[workspace.metadata.leptos]]
+name = "energybrain"
+output-name = "energybrain"
+bin-package = "energybrain"
+bin-target = "energybrain"
+lib-package = "energybrain-web"
+lib-features = ["hydrate"]
+lib-default-features = false
+lib-profile-release = "wasm-release"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+style-file = "crates/web/style/main.css"
+env = "PROD"
+# Dev builds would otherwise use `--cfg erase_components`, which changes the view types: the
+# browser bundle then fails to hydrate pages from servers built by plain `cargo` (the simulator).
+disable-erase-components = true

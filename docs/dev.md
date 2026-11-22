@@ -50,11 +50,20 @@ minute the house adds a line of its own:
 INFO energybrain_sim::driver: Tue 17:42 6.31 kW = floors 2.90 + background 1.47 + heat pump 1.00 + appliances 0.00 + ev 0.00 + extra 0.00; heating: bathroom, hallway, basement
 ```
 
-Open <http://127.0.0.1:8082/> for the history page, or `http://<dev machine>:8082/` from another
+Open <http://127.0.0.1:8082/> for the web app, or `http://<dev machine>:8082/` from another
 machine on the network (energybrain listens on all interfaces in `config/dev.toml`; the
 MQTT broker stays on localhost). It follows the simulated clock: "today"
 is the simulated day, and at 6× a minute sample arrives every 10 real seconds, so the minute
-graphs fill in while you watch (the page refreshes every real minute).
+graphs fill in while you watch. The old history page stays at `/legacy` until the web app
+has all of it (PLAN.md §10).
+
+The web app is Rust on both sides (Leptos): `just dev` and `just run` first run `just site`
+(`cargo leptos build`), which builds the browser bundle into `target/site/pkg`. That needs
+[cargo-leptos](https://github.com/leptos-rs/cargo-leptos) 0.3.11 (the release binary, or
+`cargo install cargo-leptos --locked`) and the `wasm32-unknown-unknown` target, which
+`rust-toolchain.toml` installs. energybrain serves the bundle from `ENERGYBRAIN_SITE_ROOT`
+(default `target/site`). After changing `crates/web` or `crates/view`, rerun `just site` and
+reload the page.
 
 The HTTP endpoints are on `127.0.0.1:8082`. All their timestamps are simulated time (UTC):
 

@@ -367,6 +367,7 @@ sane, topics non-empty. Errors are typed and point at the offending key.
 | SQLite | `rusqlite` (`bundled`) |
 | HTTP | `axum`, `tower` (dev, `util`) |
 | HTTPS client (Easee) | `reqwest` (`rustls`, `json`; §9) |
+| Web app (§10) | `leptos`, `leptos_router`, `leptos_axum`, `wasm-bindgen`; tool: `cargo-leptos` |
 | Metrics | `metrics`, `metrics-exporter-prometheus` |
 | Logging | `tracing`, `tracing-subscriber` |
 | Errors | `thiserror` (libraries); `anyhow` only in `main.rs` if at all |
@@ -1118,6 +1119,13 @@ coloured by state) is the next step after this section; it will build on the sam
   Drag-to-zoom is dropped.
 - **Phone-first layout:** single column, large tap targets. Readouts sit under the chart
   instead of in hover tooltips. It widens to a grid on desktop.
+- **Build gotchas (found in W3):** cargo-leptos compiles dev builds with
+  `--cfg erase_components`, which changes the view types, so the browser bundle could not
+  hydrate pages from a server built by plain `cargo` (the simulator):
+  `disable-erase-components = true` in the workspace metadata. Leptos names the bundle from
+  `LEPTOS_OUTPUT_NAME` at compile time; `.cargo/config.toml` sets it for every build.
+  `leptos_meta` is not used: the title and stylesheet are static and live in the server-side
+  shell. Routes render with `SsrMode::Async` (one complete document, no streaming).
 - **Coverage:** `just cov` adds `crates/web/` to `--ignore-filename-regex`. `just check`
   also runs `cargo clippy -p energybrain-web --target wasm32-unknown-unknown --features
   hydrate -- -D warnings`, and `cargo check --target wasm32-unknown-unknown -p

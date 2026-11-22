@@ -102,6 +102,7 @@ async fn runtime(cfg: Config, store: Box<dyn Store>, events: EventQuery) -> (Run
         tick: Duration::from_millis(50),
         retry_delay: Duration::from_millis(50),
         charger: None,
+        site_root: "target/site".into(),
     };
     (rt, port)
 }

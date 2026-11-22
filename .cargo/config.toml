@@ -1,0 +1,5 @@
+[env]
+# Leptos reads this at compile time to name the browser bundle's files. cargo-leptos sets it
+# for its own builds; setting it here makes `cargo run`/`cargo test` builds (the simulator,
+# tests) agree with the bundle cargo-leptos wrote (pkg/energybrain.wasm, not *_bg.wasm).
+LEPTOS_OUTPUT_NAME = "energybrain"

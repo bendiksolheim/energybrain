@@ -50,6 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tick: Duration::from_secs(10),
         retry_delay: Duration::from_secs(5),
         charger,
+        site_root: std::env::var("ENERGYBRAIN_SITE_ROOT")
+            .unwrap_or_else(|_| "target/site".to_owned())
+            .into(),
     };
     run(runtime, shutdown).await?;
     Ok(())

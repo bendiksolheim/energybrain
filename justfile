@@ -15,9 +15,14 @@ check:
     just cov
     just wasm-check
 
-# The crates the browser runs must keep compiling for wasm32 (PLAN.md §10)
+# The browser half must keep compiling (and linting) for wasm32 (PLAN.md §10)
 wasm-check:
     cargo check --target wasm32-unknown-unknown -p energybrain-view
+    cargo clippy --target wasm32-unknown-unknown -p energybrain-web --features hydrate -- -D warnings
+
+# The web app's browser bundle in target/site (and a debug server binary): `cargo leptos build`
+site *args:
+    cargo leptos build {{args}}
 
 fmt:
     cargo fmt --all
@@ -25,14 +30,15 @@ fmt:
 test:
     cargo test --workspace --all-features
 
+# crates/web is the one crate outside the gate (PLAN.md §10)
 cov:
-    cargo llvm-cov --workspace --all-features --fail-under-lines 100 --ignore-filename-regex '(^|/)main\.rs$'
+    cargo llvm-cov --workspace --all-features --fail-under-lines 100 --ignore-filename-regex '(^|/)main\.rs$|(^|/)crates/web/'
 
 # HTML coverage report in target/llvm-cov/html
 cov-html:
-    cargo llvm-cov --workspace --all-features --ignore-filename-regex '(^|/)main\.rs$' --html
+    cargo llvm-cov --workspace --all-features --ignore-filename-regex '(^|/)main\.rs$|(^|/)crates/web/' --html
 
-run config="config/example.toml":
+run config="config/example.toml": site
     cargo run -p energybrain -- {{config}}
 
 docker:
@@ -64,7 +70,7 @@ arch-edit view="system":
     d2 --watch --layout=elk docs/architecture/{{view}}.d2 target/arch/{{view}}.svg
 
 # energybrain against the simulated house, on accelerated time (docs/dev.md)
-dev config="config/dev.toml" sim="config/sim.toml": dev-broker
+dev config="config/dev.toml" sim="config/sim.toml": site dev-broker
     rm -f target/dev/energybrain.db target/dev/energybrain.db-*
     cargo run -p energybrain-sim -- {{config}} {{sim}}
 
