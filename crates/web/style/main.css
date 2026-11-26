@@ -20,6 +20,7 @@
   --shed: rgba(236, 131, 90, 0.20);
   --unreachable: rgba(208, 59, 59, 0.22);
   --stale: rgba(137, 135, 129, 0.22);
+  --heating: #d8452f;
   --warn: #c4561c;
   --alert: #c22f2f;
   --ok: #1b9e77;
@@ -54,6 +55,7 @@
     --shed: rgba(240, 132, 87, 0.22);
     --unreachable: rgba(232, 86, 86, 0.26);
     --stale: rgba(160, 158, 150, 0.22);
+    --heating: #f26b55;
     --warn: #f08457;
     --alert: #f06b6b;
     --ok: #35c093;
@@ -225,6 +227,7 @@ main { padding-bottom: 32px; display: grid; gap: 12px; }
 .band.unreachable { fill: var(--unreachable); }
 .band.stale { fill: var(--stale); }
 .band.override { fill: var(--override); }
+.band.heating { fill: var(--heating); }
 .bar { fill: var(--s1); }
 .bar.est { fill: var(--s1-soft); }
 .bar.over { fill: var(--alert); }
@@ -244,6 +247,7 @@ main { padding-bottom: 32px; display: grid; gap: 12px; }
 .sw.unreachable { background: var(--unreachable); }
 .sw.stale { background: var(--stale); }
 .sw.override { background: var(--override); }
+.sw.heating { background: var(--heating); }
 .legend b { font-weight: 600; }
 .bands { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 12px; color: var(--ink-2); }
 .bands span { display: inline-flex; align-items: center; gap: 6px; }

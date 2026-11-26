@@ -49,10 +49,12 @@ pub struct Series {
 /// Shading where a flag holds.
 #[derive(Clone)]
 pub struct Shade {
-    /// Colour class (`shed`, `unreachable`, `stale`, `override`).
+    /// Colour class (`shed`, `unreachable`, `stale`, `override`, `heating`).
     pub class: &'static str,
     /// One flag per sample.
     pub on: Arc<Vec<bool>>,
+    /// A thin strip along the bottom instead of the full height.
+    pub strip: bool,
 }
 
 /// A filled area between two series.
@@ -152,10 +154,15 @@ pub fn TimeChart(
             shades
                 .iter()
                 .flat_map(|s| {
+                    let (y, h) = if s.strip {
+                        ("940", "60")
+                    } else {
+                        ("0", "1000")
+                    };
                     runs(&at, &s.on, x).into_iter().map(move |(x0, w)| {
                         view! {
-                            <rect class=format!("band {}", s.class) x=format!("{x0:.1}") y="0"
-                                width=format!("{w:.1}") height="1000"/>
+                            <rect class=format!("band {}", s.class) x=format!("{x0:.1}") y=y
+                                width=format!("{w:.1}") height=h/>
                         }
                     })
                 })

@@ -74,6 +74,15 @@ fn shade(class: &'static str, on: Vec<bool>) -> Shade {
     Shade {
         class,
         on: Arc::new(on),
+        strip: false,
+    }
+}
+
+/// A thin strip along the bottom of a chart where `on` holds.
+fn strip(class: &'static str, on: Vec<bool>) -> Shade {
+    Shade {
+        strip: true,
+        ..shade(class, on)
     }
 }
 
@@ -241,7 +250,8 @@ fn ZonesCard(m: Minutes, page: Day) -> impl IntoView {
                 <div class="zone-chart">
                     <h3>{z.name}</h3>
                     <TimeChart frame=m.frame at=m.at hours=m.hours clock=m.clock series=lines
-                        shades=vec![shade("shed", z.shed)] unit="°C" min_top=10.0 short=true/>
+                        shades=vec![shade("shed", z.shed), strip("heating", z.heating)]
+                        unit="°C" min_top=10.0 short=true/>
                 </div>
             }
         })
@@ -249,8 +259,12 @@ fn ZonesCard(m: Minutes, page: Day) -> impl IntoView {
     view! {
         <section class="card">
             <h2>"Zones"</h2>
-            <p class="sub">"Setpoints per floor. Shaded where the guard shed the zone (in observe mode: would have shed it)."</p>
+            <p class="sub">"Setpoints per floor. Shaded where the guard shed the zone (in observe mode: would have shed it); the strip along the bottom marks when the floor was drawing power."</p>
             <div class="zone-charts">{zones}</div>
+            <div class="bands">
+                <span><i class="sw shed"></i>"Shed"</span>
+                <span><i class="sw heating"></i>"Heating"</span>
+            </div>
         </section>
     }
 }

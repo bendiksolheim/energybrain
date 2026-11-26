@@ -15,6 +15,11 @@ use crate::fmt::{LocalClock, num, qty};
 /// A zone counts as heating above this draw (as the engine's power learning does).
 const HEATING: f64 = 0.05;
 
+/// Whether a zone drawing `kw` counts as heating.
+pub(crate) fn heating(kw: f64) -> bool {
+    kw > HEATING
+}
+
 /// How a tile or chip should stand out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -274,7 +279,7 @@ fn zone_chip(z: &ZoneStatus) -> ZoneChip {
         ZoneState::Shed
     } else if z.override_until.is_some() {
         ZoneState::Overridden
-    } else if z.power.is_some_and(|p| p.value() > HEATING) {
+    } else if z.power.is_some_and(|p| heating(p.value())) {
         ZoneState::Heating
     } else {
         ZoneState::Idle

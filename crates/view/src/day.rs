@@ -99,6 +99,8 @@ pub struct ZoneSamples {
     pub power: Vec<Option<f64>>,
     /// Shed by the guard.
     pub shed: Vec<bool>,
+    /// Drawing power (above the same threshold the status bar uses).
+    pub heating: Vec<bool>,
 }
 
 /// One stored event, described.
@@ -241,6 +243,12 @@ pub fn day_page(site: &Site, view: &DayView) -> DayPage {
             base: values(&z.base),
             power: values(&z.power),
             shed: flags(&z.shed),
+            heating: z
+                .power
+                .values
+                .iter()
+                .map(|p| p.is_some_and(crate::status::heating))
+                .collect(),
         })
         .collect();
     let events = view
@@ -457,6 +465,18 @@ mod tests {
         insta::assert_snapshot!(serde_json::to_string_pretty(&page).unwrap());
         let back: DayPage = serde_json::from_str(&serde_json::to_string(&page).unwrap()).unwrap();
         assert_eq!(back, page);
+    }
+
+    #[test]
+    fn a_zone_heats_while_it_draws_more_than_the_threshold() {
+        let mut history = day_history();
+        history.samples[1].zones[0].power = Some(Kw::new(0.05));
+        history.samples[2].zones[0].power = None;
+        let page = page_of(date(2026, 11, 15), history);
+        let zone = &page.zones[0];
+        assert_eq!(zone.name, "Bathroom");
+        // The fourth point is the gap while the service was down.
+        assert_eq!(zone.heating, [true, false, false, false, true]);
     }
 
     #[test]

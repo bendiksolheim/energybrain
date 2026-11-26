@@ -1,6 +1,6 @@
 ---
 source: crates/view/src/day.rs
-assertion_line: 455
+assertion_line: 465
 expression: "serde_json::to_string_pretty(&page).unwrap()"
 ---
 {
@@ -491,6 +491,13 @@ expression: "serde_json::to_string_pretty(&page).unwrap()"
         true,
         false,
         false
+      ],
+      "heating": [
+        true,
+        true,
+        true,
+        false,
+        true
       ]
     },
     {
@@ -524,6 +531,13 @@ expression: "serde_json::to_string_pretty(&page).unwrap()"
         null
       ],
       "shed": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "heating": [
         false,
         false,
         false,
